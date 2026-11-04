@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0; background: #050B1E; color: #E8ECF4; font-family: Inter, system-ui, sans-serif;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+}
+:focus-visible { outline: 2px solid #F5B800; outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .logo-float { animation: float 6s ease-in-out infinite; }
+}
+@keyframes float { 50% { transform: translateY(-8px); } }
+
+@layer components {
+  .btn-gold { @apply inline-flex items-center justify-center rounded-full bg-gradient-to-b from-gold-200 to-gold-400 px-6 py-3 font-semibold text-navy-950 shadow-lg active:scale-95 transition; }
+  .btn-ghost { @apply inline-flex items-center justify-center rounded-full border border-gold-400/70 px-6 py-3 font-semibold text-gold-200 active:scale-95 transition; }
+  .field { @apply w-full rounded-xl border border-navy-700 bg-navy-900 px-4 py-3 text-silver-100 placeholder:text-silver-500; }
+}
