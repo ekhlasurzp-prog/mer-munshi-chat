@@ -1,0 +1,9 @@
+{
+  "name": "MER Munshi Chat",
+  "short_name": "Munshi Chat",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050B1E",
+  "theme_color": "#050B1E",
+  "icons": [{ "src": "/logo.png", "sizes": "1254x1254", "type": "image/png", "purpose": "any" }]
+}
