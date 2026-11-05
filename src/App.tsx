@@ -3,6 +3,7 @@ import Landing from './pages/Landing'
 import Auth from './pages/Auth'
 import Onboarding from './pages/Onboarding'
 import ChatShell from './pages/ChatShell'
+import { supabase } from './lib/supabase'
 
 // Simple hash routing keeps the project dependency-free for now.
 const route = () => window.location.hash.replace(/^#/, '') || '/'
@@ -12,6 +13,12 @@ export default function App() {
   useEffect(() => {
     const on = () => setPath(route())
     window.addEventListener('hashchange', on)
+    // Already signed in? Skip the landing and login pages and open the chat.
+    if (supabase && ['/', '/login'].includes(route())) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) window.location.hash = '/chat'
+      })
+    }
     return () => window.removeEventListener('hashchange', on)
   }, [])
 
