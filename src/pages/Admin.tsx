@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { ChangeEvent, useCallback, useEffect, useState } from 'react'
 import Logo from '../components/Logo'
 import { supabase } from '../lib/supabase'
+import { refreshBrand } from '../lib/brand'
+
+// Crop to a centered square and shrink, so the logo stays undistorted inside its circle
+async function squareLogo(file: File, size = 512): Promise<Blob> {
+  const bmp = await createImageBitmap(file)
+  const side = Math.min(bmp.width, bmp.height)
+  const c = document.createElement('canvas')
+  c.width = size; c.height = size
+  c.getContext('2d')!.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size)
+  return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not process the image'))), 'image/png'))
+}
 
 type Phase = 'loading' | 'denied' | 'enroll' | 'verify' | 'ready'
 
@@ -17,6 +28,11 @@ export default function Admin() {
   const [reports, setReports] = useState<any[]>([])
   const [audit, setAudit] = useState<any[]>([])
   const [ret, setRet] = useState('0')
+  const [brandName, setBrandName] = useState('')
+  const [logoPath, setLogoPath] = useState('')
+  const [anns, setAnns] = useState<any[]>([])
+  const [annText, setAnnText] = useState('')
+  const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     const sb = supabase
@@ -28,6 +44,13 @@ export default function Admin() {
     if (bad) { setErr(bad.message); return }
     setStats(s.data); setUsers((u.data ?? []) as any[]); setReports((r.data ?? []) as any[]); setAudit((a.data ?? []) as any[])
     setRet(String((s.data as any)?.retention_days ?? 0))
+    const [b, an] = await Promise.all([
+      sb.rpc('get_branding'),
+      sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(20),
+    ])
+    const br = b.data as any
+    if (br) { setBrandName(br.name ?? ''); setLogoPath(br.logo_path ?? '') }
+    setAnns((an.data ?? []) as any[])
     setPhase('ready')
   }, [])
 
@@ -76,6 +99,58 @@ export default function Admin() {
     if (error) { setNote(error.message); return }
     setNote(data?.skipped ? 'Automatic deletion is off.' : `Deleted ${data?.deleted ?? 0} messages and ${data?.files ?? 0} files.`)
     load()
+  }
+
+  async function saveName() {
+    const { error } = await supabase!.rpc('admin_set_branding', { new_name: brandName, new_logo: null })
+    setNote(error ? error.message : 'Name saved. Everyone sees it the next time the app opens.')
+    if (!error) refreshBrand()
+  }
+
+  async function pickLogo(e: ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    const sb = supabase
+    if (!f || !sb) return
+    if (!f.type.startsWith('image/')) { setNote('Please choose an image.'); return }
+    setBusy(true); setNote('')
+    try {
+      const blob = await squareLogo(f)
+      const path = `${crypto.randomUUID()}.png`
+      const up = await sb.storage.from('branding').upload(path, blob, { contentType: 'image/png' })
+      if (up.error) throw up.error
+      const { error } = await sb.rpc('admin_set_branding', { new_name: brandName, new_logo: path })
+      if (error) throw error
+      if (logoPath) await sb.storage.from('branding').remove([logoPath])
+      setLogoPath(path)
+      await refreshBrand()
+      setNote('Logo changed. Everyone sees it the next time the app opens.')
+    } catch (er: any) { setNote(er?.message ?? String(er)) }
+    setBusy(false)
+  }
+
+  async function resetLogo() {
+    const sb = supabase
+    if (!sb || !window.confirm('Go back to the original logo?')) return
+    const { error } = await sb.rpc('admin_set_branding', { new_name: brandName, new_logo: '' })
+    if (error) { setNote(error.message); return }
+    if (logoPath) await sb.storage.from('branding').remove([logoPath])
+    setLogoPath('')
+    await refreshBrand()
+    setNote('Original logo restored.')
+  }
+
+  async function postAnn() {
+    if (!window.confirm('Send this message to ALL users?')) return
+    const { error } = await supabase!.rpc('admin_post_announcement', { msg: annText })
+    if (error) { setNote(error.message); return }
+    setAnnText(''); setNote('Sent to all users.'); load()
+  }
+
+  async function delAnn(id: string) {
+    if (!window.confirm('Delete this announcement for everyone?')) return
+    const { error } = await supabase!.rpc('admin_delete_announcement', { aid: id })
+    if (error) setNote(error.message); else load()
   }
 
   async function suspend(id: string, flag: boolean) {
@@ -153,6 +228,36 @@ export default function Admin() {
         <button onClick={runNow} className="btn-ghost flex-1">Run cleanup now</button>
       </div>
       {note && <p className="mt-2 text-sm text-gold-200">{note}</p>}
+
+      <h2 className="mt-8 text-lg text-gold-200">App name and logo</h2>
+      <p className="text-xs text-silver-500">Shown everywhere inside the app. A square picture works best; it is shown inside a circle.</p>
+      <div className="mt-2 flex items-center gap-3">
+        <Logo size={64} />
+        <label className="btn-gold cursor-pointer px-4 py-2 text-sm">
+          Change logo
+          <input type="file" accept="image/*" className="hidden" onChange={pickLogo} disabled={busy} />
+        </label>
+        {logoPath && <button onClick={resetLogo} className="btn-ghost px-4 py-2 text-sm">Use original</button>}
+      </div>
+      <input className="field mt-3" value={brandName} maxLength={40} onChange={(e) => setBrandName(e.target.value)} placeholder="App name" />
+      <button onClick={saveName} disabled={!brandName.trim()} className="btn-gold mt-2 w-full disabled:opacity-40">Save name</button>
+      <p className="mt-1 text-xs text-silver-500">
+        The icon and name on phone home screens come from the install file, so they change only after an update and reinstall.
+      </p>
+
+      <h2 className="mt-8 text-lg text-gold-200">Message all users</h2>
+      <p className="text-xs text-silver-500">Appears at the top of everyone's chat list. Good for app updates.</p>
+      <textarea className="field mt-2 h-28" maxLength={1000} value={annText} onChange={(e) => setAnnText(e.target.value)} placeholder="Write an update for all users" />
+      <button onClick={postAnn} disabled={!annText.trim()} className="btn-gold mt-2 w-full disabled:opacity-40">Send to all users</button>
+      <ul className="mt-3 space-y-2 text-sm">
+        {anns.map((a) => (
+          <li key={a.id} className="rounded-xl bg-navy-900 p-3">
+            <p className="text-xs text-silver-500">{new Date(a.created_at).toLocaleString()}</p>
+            <p className="mt-1 whitespace-pre-wrap break-words">{a.body}</p>
+            <button onClick={() => delAnn(a.id)} className="mt-2 text-xs text-red-300 underline">Delete</button>
+          </li>
+        ))}
+      </ul>
 
       <h2 className="mt-8 text-lg text-gold-200">Reports</h2>
       {reports.length === 0 && <p className="text-sm text-silver-500">No reports.</p>}

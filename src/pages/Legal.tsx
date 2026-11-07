@@ -1,16 +1,19 @@
+import { useBrand } from '../lib/brand'
+
 export default function Legal({ kind }: { kind: 'privacy' | 'terms' }) {
+  const brand = useBrand()
   return (
     <main className="mx-auto min-h-full max-w-xl space-y-4 px-6 py-8 text-sm leading-relaxed text-silver-100">
       <a href="#/" className="text-gold-200">&larr; Home</a>
       {kind === 'privacy' ? (
         <>
           <h1 className="font-display text-3xl text-gold-200">Privacy policy</h1>
-          <p>MER Munshi Chat lets you chat with a username instead of your real name. We try to collect only what the service needs.</p>
+          <p>{brand.name} lets you chat with a username instead of your real name. We try to collect only what the service needs.</p>
           <h2 className="text-lg text-gold-200">What we store</h2>
           <ul className="list-disc space-y-1 pl-5">
             <li>Your email address and a protected password, for sign-in and recovery. Other users cannot see your email.</li>
             <li>Your username, optional profile photo, and the private names you give to other people.</li>
-            <li>Your messages, reactions, and the photos and voice notes you send.</li>
+            <li>Your messages, reactions, and the photos and voice notes you send. The text of recent messages is also saved on your own device so you can read it offline, and is removed when you sign out.</li>
             <li>Blocks and reports you make, and a notification address for your device if you turn on notifications.</li>
           </ul>
           <h2 className="text-lg text-gold-200">Who can access it</h2>
@@ -28,7 +31,7 @@ export default function Legal({ kind }: { kind: 'privacy' | 'terms' }) {
       ) : (
         <>
           <h1 className="font-display text-3xl text-gold-200">Terms of service</h1>
-          <p>By using MER Munshi Chat you agree to these simple rules.</p>
+          <p>By using {brand.name} you agree to these simple rules.</p>
           <ul className="list-disc space-y-2 pl-5">
             <li>Be respectful. Do not harass, threaten, scam or impersonate anyone.</li>
             <li>Do not share illegal content or content that exploits or harms children.</li>

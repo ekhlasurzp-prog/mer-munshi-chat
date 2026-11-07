@@ -1,13 +1,15 @@
 import Logo from '../components/Logo'
 import StatusBanner from '../components/StatusBanner'
+import { useBrand } from '../lib/brand'
 
 export default function Landing() {
+  const brand = useBrand()
   return (
     <div className="min-h-full bg-[radial-gradient(ellipse_at_top,#142C63_0%,#050B1E_60%)]">
       <StatusBanner />
       <main className="mx-auto flex max-w-xl flex-col items-center px-6 pb-16 pt-10 text-center">
         <div className="logo-float"><Logo size={260} glow /></div>
-        <h1 className="mt-10 font-display text-4xl text-gold-200">MER Munshi Chat</h1>
+        <h1 className="mt-10 font-display text-4xl text-gold-200">{brand.name}</h1>
         <p className="mt-3 text-xl text-silver-100">
           Your conversations. Your privacy. Your identity, your choice.
         </p>

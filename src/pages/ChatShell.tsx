@@ -2,6 +2,8 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import Logo from '../components/Logo'
 import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
+import { useBrand } from '../lib/brand'
+import { clearCache, readCache, writeCache } from '../lib/offline'
 
 type Msg = {
   id: string; conversation_id: string; sender_id: string; body: string | null
@@ -11,6 +13,9 @@ type Msg = {
 type Conv = { id: string; type: string; username: string; peerId: string | null; avatar: string | null; lastRead: string }
 type Found = { id: string; username: string; avatar_path: string | null }
 type Reacts = Record<string, Record<string, string>>
+type Ann = { id: string; body: string; created_at: string }
+const OFFLINE_MSG = 'You are offline. You can read saved messages, but sending needs internet.'
+const readDismissed = (): string[] => { try { return JSON.parse(localStorage.getItem('mmc-dismissed') || '[]') } catch { return [] } }
 
 const COLS = 'id,conversation_id,sender_id,body,created_at,deleted_at,attachment_path,attachment_name,attachment_type'
 const EMOJIS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}']
@@ -46,15 +51,22 @@ function Body({ text }: { text: string }) {
 // Private files are shown through short-lived signed links
 function Attach({ path, type }: { path: string; type: string | null }) {
   const [url, setUrl] = useState('')
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     let ok = true
-    supabase?.storage.from('attachments').createSignedUrl(path, 3600).then(({ data }) => {
-      if (ok && data) setUrl(data.signedUrl)
-    })
+    setFailed(false)
+    Promise.resolve(supabase?.storage.from('attachments').createSignedUrl(path, 3600))
+      .then((r) => {
+        if (!ok) return
+        if (r?.data) setUrl(r.data.signedUrl); else setFailed(true)
+      })
+      .catch(() => { if (ok) setFailed(true) })
     return () => { ok = false }
   }, [path])
+  const audio = type?.startsWith('audio/')
+  if (failed) return <p className="text-xs opacity-70">{audio ? 'Voice message' : 'Photo'} (needs internet)</p>
   if (!url) return <p className="text-xs opacity-70">Loading...</p>
-  if (type?.startsWith('audio/')) return <audio controls src={url} className="max-w-full" />
+  if (audio) return <audio controls src={url} className="max-w-full" />
   return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="Photo" className="max-h-64 rounded-lg" /></a>
 }
 
@@ -76,6 +88,10 @@ export default function ChatShell() {
   const [err, setErr] = useState('')
   const [recording, setRecording] = useState(false)
   const [recSec, setRecSec] = useState(0)
+  const [anns, setAnns] = useState<Ann[]>([])
+  const [dismissed, setDismissed] = useState<string[]>(readDismissed)
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
+  const brand = useBrand()
   const bottom = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convsRef = useRef<Conv[]>([])
@@ -93,75 +109,99 @@ export default function ChatShell() {
   const loadAll = useCallback(async (uid: string) => {
     const sb = supabase
     if (!sb) return
-    const { data: mem } = await sb.from('conversation_members')
-      .select('conversation_id, last_read_at, conversations(id,type,title)').eq('user_id', uid)
-    const rows = (mem ?? []) as any[]
-    const ids = rows.map((r) => r.conversation_id)
-    const peer: Record<string, { id: string; username: string; avatar: string | null; read: string }> = {}
-    if (ids.length) {
-      const { data: others } = await sb.from('conversation_members')
-        .select('conversation_id, user_id, last_read_at, profiles(username, avatar_path)')
-        .in('conversation_id', ids).neq('user_id', uid)
-      for (const o of (others ?? []) as any[]) {
-        if (!peer[o.conversation_id]) {
-          peer[o.conversation_id] = {
-            id: o.user_id, username: o.profiles?.username ?? 'user',
-            avatar: o.profiles?.avatar_path ?? null, read: o.last_read_at,
+    try {
+      const { data: mem, error: memErr } = await sb.from('conversation_members')
+        .select('conversation_id, last_read_at, conversations(id,type,title)').eq('user_id', uid)
+      if (memErr || !mem) { setOnline(false); return } // no connection: keep the saved copy
+      const rows = mem as any[]
+      const ids = rows.map((r) => r.conversation_id)
+      const peer: Record<string, { id: string; username: string; avatar: string | null; read: string }> = {}
+      if (ids.length) {
+        const { data: others } = await sb.from('conversation_members')
+          .select('conversation_id, user_id, last_read_at, profiles(username, avatar_path)')
+          .in('conversation_id', ids).neq('user_id', uid)
+        for (const o of (others ?? []) as any[]) {
+          if (!peer[o.conversation_id]) {
+            peer[o.conversation_id] = {
+              id: o.user_id, username: o.profiles?.username ?? 'user',
+              avatar: o.profiles?.avatar_path ?? null, read: o.last_read_at,
+            }
           }
         }
       }
-    }
-    const pr: Record<string, string> = {}
-    setConvs(rows.map((r) => {
-      const c = r.conversations
-      const p = peer[r.conversation_id]
-      const direct = c?.type !== 'group'
-      if (direct && p) pr[r.conversation_id] = p.read
-      return {
-        id: r.conversation_id, type: c?.type ?? 'direct',
-        username: direct ? (p?.username ?? 'user') : (c.title ?? 'Group'),
-        peerId: direct ? (p?.id ?? null) : null,
-        avatar: direct ? (p?.avatar ?? null) : null,
-        lastRead: r.last_read_at,
-      }
-    }))
-    setPeerRead(pr)
+      const pr: Record<string, string> = {}
+      const convList: Conv[] = rows.map((r) => {
+        const c = r.conversations
+        const p = peer[r.conversation_id]
+        const direct = c?.type !== 'group'
+        if (direct && p) pr[r.conversation_id] = p.read
+        return {
+          id: r.conversation_id, type: c?.type ?? 'direct',
+          username: direct ? (p?.username ?? 'user') : (c.title ?? 'Group'),
+          peerId: direct ? (p?.id ?? null) : null,
+          avatar: direct ? (p?.avatar ?? null) : null,
+          lastRead: r.last_read_at,
+        }
+      })
 
-    const [m, n, b, rx, ret] = await Promise.all([
-      sb.from('messages').select(COLS).order('created_at', { ascending: false }).limit(500),
-      sb.from('nicknames').select('target_id, nickname').eq('owner_id', uid),
-      sb.from('blocks').select('blocked_id').eq('blocker_id', uid),
-      sb.from('reactions').select('message_id, user_id, emoji').limit(3000),
-      sb.rpc('get_retention'),
-    ])
-    setMsgs(((m.data ?? []) as Msg[]).reverse())
-    const nk: Record<string, string> = {}
-    for (const x of (n.data ?? []) as any[]) nk[x.target_id] = x.nickname
-    setNicks(nk)
-    const bk: Record<string, boolean> = {}
-    for (const x of (b.data ?? []) as any[]) bk[x.blocked_id] = true
-    setBlocked(bk)
-    const rr: Reacts = {}
-    for (const x of (rx.data ?? []) as any[]) {
-      if (!rr[x.message_id]) rr[x.message_id] = {}
-      rr[x.message_id][x.user_id] = x.emoji
+      const [m, n, b, rx, ret, an] = await Promise.all([
+        sb.from('messages').select(COLS).order('created_at', { ascending: false }).limit(500),
+        sb.from('nicknames').select('target_id, nickname').eq('owner_id', uid),
+        sb.from('blocks').select('blocked_id').eq('blocker_id', uid),
+        sb.from('reactions').select('message_id, user_id, emoji').limit(3000),
+        sb.rpc('get_retention'),
+        sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(10),
+      ])
+      if (m.error) { setOnline(false); return }
+      const msgList = ((m.data ?? []) as Msg[]).reverse()
+      const nk: Record<string, string> = {}
+      for (const x of (n.data ?? []) as any[]) nk[x.target_id] = x.nickname
+      const bk: Record<string, boolean> = {}
+      for (const x of (b.data ?? []) as any[]) bk[x.blocked_id] = true
+      const rr: Reacts = {}
+      for (const x of (rx.data ?? []) as any[]) {
+        if (!rr[x.message_id]) rr[x.message_id] = {}
+        rr[x.message_id][x.user_id] = x.emoji
+      }
+      const annList = (an.data ?? []) as Ann[]
+
+      setConvs(convList); setPeerRead(pr); setMsgs(msgList); setNicks(nk); setBlocked(bk)
+      setReactions(rr); setAnns(annList)
+      setRetention(typeof ret.data === 'number' ? ret.data : null)
+      setOnline(true)
+      writeCache({ uid, convs: convList, msgs: msgList, nicks: nk, peerRead: pr, anns: annList })
+    } catch {
+      setOnline(false)
     }
-    setReactions(rr)
-    setRetention(typeof ret.data === 'number' ? ret.data : null)
   }, [])
 
-  // Start-up: check sign-in, load data, listen for changes in real time
+  // Start-up: show saved messages at once, check sign-in, load fresh data, listen for changes
   useEffect(() => {
     if (!supabase) { window.location.hash = '/login'; return }
     const sb = supabase
     let cancelled = false
     let channel: ReturnType<typeof sb.channel> | null = null
     ;(async () => {
-      const { data } = await sb.auth.getUser()
-      if (!data.user) { window.location.hash = '/login'; return }
-      const uid = data.user.id
-      const { data: p } = await sb.from('profiles').select('username').eq('id', uid).maybeSingle()
-      if (!p) { window.location.hash = '/onboarding'; return }
+      const cached = readCache()
+      if (cached) {
+        setMe(cached.uid); setConvs(cached.convs); setMsgs(cached.msgs)
+        setNicks(cached.nicks); setPeerRead(cached.peerRead); setAnns(cached.anns)
+      }
+      const { data, error } = await sb.auth.getUser()
+      let uid = data.user?.id
+      if (!uid) {
+        const offlineNow = !navigator.onLine || (error && /fetch|network/i.test(error.message))
+        if (offlineNow && cached) { uid = cached.uid; setOnline(false) } else {
+          clearCache(); window.location.hash = '/login'; return
+        }
+      }
+      if (cached && cached.uid !== uid) {
+        clearCache(); setConvs([]); setMsgs([]); setNicks({}); setPeerRead({}); setAnns([])
+      }
+      if (navigator.onLine) {
+        const { data: p } = await sb.from('profiles').select('username').eq('id', uid).maybeSingle()
+        if (!p) { window.location.hash = '/onboarding'; return }
+      }
       if (cancelled) return
       setMe(uid)
       await loadAll(uid)
@@ -180,6 +220,10 @@ export default function ChatShell() {
           if (payload.eventType === 'DELETE') return
           const r = payload.new as { message_id: string; user_id: string; emoji: string }
           setReactions((p0) => ({ ...p0, [r.message_id]: { ...(p0[r.message_id] ?? {}), [r.user_id]: r.emoji } }))
+        })
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'announcements' }, (payload) => {
+          const a2 = payload.new as Ann
+          setAnns((p0) => [a2, ...p0.filter((x) => x.id !== a2.id)].slice(0, 10))
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members', filter: `user_id=eq.${uid}` },
           () => loadAll(uid))
@@ -210,8 +254,16 @@ export default function ChatShell() {
   useEffect(() => {
     if (!me) return
     const on = () => { if (document.visibilityState === 'visible') loadAll(me) }
+    const goOnline = () => { setOnline(true); loadAll(me) }
+    const goOffline = () => setOnline(false)
     document.addEventListener('visibilitychange', on)
-    return () => document.removeEventListener('visibilitychange', on)
+    window.addEventListener('online', goOnline)
+    window.addEventListener('offline', goOffline)
+    return () => {
+      document.removeEventListener('visibilitychange', on)
+      window.removeEventListener('online', goOnline)
+      window.removeEventListener('offline', goOffline)
+    }
   }, [me, loadAll])
 
   // If the open chat no longer exists, go back to the list
@@ -245,6 +297,7 @@ export default function ChatShell() {
 
   async function addMessage(row: Record<string, unknown>) {
     if (!supabase) return false
+    if (!navigator.onLine) { setErr(OFFLINE_MSG); return false }
     const { data, error } = await supabase.from('messages').insert(row).select(COLS).single()
     if (error) { setErr(nice(error.message)); return false }
     const m = data as Msg
@@ -265,6 +318,7 @@ export default function ChatShell() {
   async function upload(file: Blob, name: string, type: string) {
     const cid = activeRef.current, uid = meRef.current
     if (!supabase || !cid || !uid) return
+    if (!navigator.onLine) { setErr(OFFLINE_MSG); return }
     setErr('')
     const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) : 'bin'
     const path = `${cid}/${crypto.randomUUID()}.${ext}`
@@ -414,6 +468,12 @@ export default function ChatShell() {
     return l.body ?? ''
   }
   const chat = convs.find((c) => c.id === active)
+  const visibleAnns = anns.filter((a) => !dismissed.includes(a.id)).slice(0, 3)
+  const dismissAnn = (id: string) => {
+    const next = [...dismissed, id].slice(-50)
+    setDismissed(next)
+    try { localStorage.setItem('mmc-dismissed', JSON.stringify(next)) } catch { /* ignore */ }
+  }
   const notice = retention ? `Messages older than ${retention} days are deleted automatically.` : ''
 
   if (!me) return <div className="grid h-full place-items-center text-silver-300">Loading...</div>
@@ -425,11 +485,16 @@ export default function ChatShell() {
           {err} (tap to close)
         </p>
       )}
+      {!online && (
+        <p className="bg-gold-400/15 px-4 py-1 text-center text-xs text-gold-200">
+          Offline: showing saved messages. Photos, voice notes and sending need internet.
+        </p>
+      )}
       <div className="flex min-h-0 flex-1">
         <aside className={`${active ? 'hidden' : 'flex'} w-full flex-col border-r border-navy-700 bg-navy-900 md:flex md:w-80`}>
           <header className="flex items-center gap-3 border-b border-navy-700 p-3">
             <Logo size={40} />
-            <h1 className="flex-1 font-display text-lg text-gold-200">Munshi Chat</h1>
+            <h1 className="min-w-0 flex-1 truncate font-display text-lg text-gold-200">{brand.name}</h1>
             <a href="#/profile" className="rounded-full border border-gold-400/70 px-3 py-1 text-sm text-gold-200">Profile</a>
           </header>
           <div className="border-b border-navy-700 p-3">
@@ -437,6 +502,13 @@ export default function ChatShell() {
               placeholder="Find a username" autoCapitalize="none" autoCorrect="off" />
           </div>
           <ul className="flex-1 overflow-y-auto">
+            {!q && visibleAnns.map((a) => (
+              <li key={a.id} className="border-b border-navy-800 bg-gold-400/10 p-3 text-sm">
+                <p className="text-xs font-semibold text-gold-200">Update from {brand.name}</p>
+                <p className="mt-1 whitespace-pre-wrap break-words">{a.body}</p>
+                <button onClick={() => dismissAnn(a.id)} className="mt-2 text-xs text-silver-300 underline">Dismiss</button>
+              </li>
+            ))}
             {q.trim().length >= 2 && found.length === 0 && (
               <li className="p-4 text-sm text-silver-500">No users found.</li>
             )}

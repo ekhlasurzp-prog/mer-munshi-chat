@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useState } from 'react'
 import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
+import { clearCache } from '../lib/offline'
 
 // Shrink a photo to at most 256 px before upload (small and fast on mobile data)
 async function shrink(file: File, max = 256): Promise<Blob> {
@@ -21,6 +22,7 @@ export default function Profile() {
   const [admin, setAdmin] = useState(false)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [anns, setAnns] = useState<{ id: string; body: string; created_at: string }[]>([])
 
   useEffect(() => {
     const sb = supabase
@@ -34,6 +36,8 @@ export default function Profile() {
       setName(p.username); setAvatar(p.avatar_path)
       const { data: a } = await sb.rpc('am_i_admin')
       setAdmin(a === true)
+      const { data: an } = await sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(10)
+      setAnns((an ?? []) as any[])
     })()
   }, [])
 
@@ -66,6 +70,7 @@ export default function Profile() {
 
   async function signOut() {
     await supabase?.auth.signOut()
+    clearCache()
     window.location.hash = '/'
   }
 
@@ -78,6 +83,7 @@ export default function Profile() {
     const { error } = await supabase.functions.invoke('cleanup', { body: { action: 'delete_account' } })
     if (error) { setBusy(false); setMsg(error.message); return }
     await supabase.auth.signOut()
+    clearCache()
     window.location.hash = '/'
   }
 
@@ -99,6 +105,20 @@ export default function Profile() {
         </p>
       </div>
       {msg && <p role="alert" className="mt-4 text-center text-sm text-gold-200">{msg}</p>}
+
+      {anns.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-lg text-gold-200">Updates</h2>
+          <ul className="mt-2 space-y-2 text-sm">
+            {anns.map((a) => (
+              <li key={a.id} className="rounded-xl bg-navy-900 p-3">
+                <p className="text-xs text-silver-500">{new Date(a.created_at).toLocaleDateString()}</p>
+                <p className="mt-1 whitespace-pre-wrap break-words">{a.body}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-8 space-y-3 text-sm">
         <p className="text-silver-300">
