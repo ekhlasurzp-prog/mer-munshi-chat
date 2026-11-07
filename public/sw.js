@@ -51,7 +51,7 @@ self.addEventListener('push', (event) => {
     if (wins.some((w) => w.visibilityState === 'visible')) return
     await self.registration.showNotification(d.title || 'MER Munshi Chat', {
       body: d.body || 'You have a new message',
-      icon: '/icons/icon-192.png',
+      icon: d.icon || '/icons/icon-192.png',
       badge: '/icons/badge-96.png',
       data: { url: '/#/chat' },
     })
