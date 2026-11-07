@@ -22,7 +22,9 @@ export default function Landing() {
           Chat with a username, not your real name. We will explain exactly what data is stored
           before you sign up. No messaging service can promise complete anonymity.
         </p>
-        <a href="#/chat" className="mt-6 text-xs text-silver-500 underline">Preview chat layout (sample data)</a>
+        <p className="mt-6 text-xs text-silver-500">
+          <a href="#/privacy" className="underline">Privacy policy</a> &middot; <a href="#/terms" className="underline">Terms of service</a>
+        </p>
       </main>
     </div>
   )

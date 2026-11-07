@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import Logo from '../components/Logo'
+import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
 
 type Msg = {
@@ -7,14 +8,19 @@ type Msg = {
   created_at: string; deleted_at: string | null
   attachment_path: string | null; attachment_name: string | null; attachment_type: string | null
 }
-type Conv = { id: string; name: string; lastRead: string }
-type Found = { id: string; username: string }
+type Conv = { id: string; type: string; username: string; peerId: string | null; avatar: string | null; lastRead: string }
+type Found = { id: string; username: string; avatar_path: string | null }
+type Reacts = Record<string, Record<string, string>>
 
 const COLS = 'id,conversation_id,sender_id,body,created_at,deleted_at,attachment_path,attachment_name,attachment_type'
+const EMOJIS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}']
+const HEART = EMOJIS[1]
 const MAX_IMAGE = 10 * 1024 * 1024 // 10 MB
 const MAX_VOICE_SECONDS = 30
 const LONG_TEXT = 300
 const fmt = (s: string) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+const nice = (m: string) =>
+  /row-level security/i.test(m) ? 'Could not send. The chat may have been deleted, or sending is blocked.' : m
 
 const PlaneIcon = () => (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden>
@@ -54,12 +60,16 @@ function Attach({ path, type }: { path: string; type: string | null }) {
 
 export default function ChatShell() {
   const [me, setMe] = useState<string | null>(null)
-  const [myName, setMyName] = useState('')
   const [convs, setConvs] = useState<Conv[]>([])
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [peerRead, setPeerRead] = useState<Record<string, string>>({})
+  const [nicks, setNicks] = useState<Record<string, string>>({})
+  const [blocked, setBlocked] = useState<Record<string, boolean>>({})
+  const [reactions, setReactions] = useState<Reacts>({})
+  const [retention, setRetention] = useState<number | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [sel, setSel] = useState<string | null>(null)
+  const [menu, setMenu] = useState(false)
   const [text, setText] = useState('')
   const [q, setQ] = useState('')
   const [found, setFound] = useState<Found[]>([])
@@ -81,39 +91,63 @@ export default function ChatShell() {
   meRef.current = me
 
   const loadAll = useCallback(async (uid: string) => {
-    if (!supabase) return
-    const { data: mem } = await supabase
-      .from('conversation_members')
-      .select('conversation_id, last_read_at, conversations(id,type,title)')
-      .eq('user_id', uid)
+    const sb = supabase
+    if (!sb) return
+    const { data: mem } = await sb.from('conversation_members')
+      .select('conversation_id, last_read_at, conversations(id,type,title)').eq('user_id', uid)
     const rows = (mem ?? []) as any[]
     const ids = rows.map((r) => r.conversation_id)
-    const types: Record<string, string> = {}
-    rows.forEach((r) => { types[r.conversation_id] = r.conversations?.type })
-    const names: Record<string, string> = {}
-    const pr: Record<string, string> = {}
+    const peer: Record<string, { id: string; username: string; avatar: string | null; read: string }> = {}
     if (ids.length) {
-      const { data: others } = await supabase
-        .from('conversation_members')
-        .select('conversation_id, last_read_at, profiles(username)')
-        .in('conversation_id', ids)
-        .neq('user_id', uid)
+      const { data: others } = await sb.from('conversation_members')
+        .select('conversation_id, user_id, last_read_at, profiles(username, avatar_path)')
+        .in('conversation_id', ids).neq('user_id', uid)
       for (const o of (others ?? []) as any[]) {
-        if (!names[o.conversation_id]) {
-          names[o.conversation_id] = o.profiles?.username ?? 'user'
-          if (types[o.conversation_id] === 'direct') pr[o.conversation_id] = o.last_read_at
+        if (!peer[o.conversation_id]) {
+          peer[o.conversation_id] = {
+            id: o.user_id, username: o.profiles?.username ?? 'user',
+            avatar: o.profiles?.avatar_path ?? null, read: o.last_read_at,
+          }
         }
       }
     }
-    setPeerRead(pr)
+    const pr: Record<string, string> = {}
     setConvs(rows.map((r) => {
       const c = r.conversations
-      const name = c?.type === 'group' ? (c.title ?? 'Group') : (names[r.conversation_id] ?? 'user')
-      return { id: r.conversation_id, name, lastRead: r.last_read_at }
+      const p = peer[r.conversation_id]
+      const direct = c?.type !== 'group'
+      if (direct && p) pr[r.conversation_id] = p.read
+      return {
+        id: r.conversation_id, type: c?.type ?? 'direct',
+        username: direct ? (p?.username ?? 'user') : (c.title ?? 'Group'),
+        peerId: direct ? (p?.id ?? null) : null,
+        avatar: direct ? (p?.avatar ?? null) : null,
+        lastRead: r.last_read_at,
+      }
     }))
-    const { data: m } = await supabase.from('messages').select(COLS)
-      .order('created_at', { ascending: false }).limit(500)
-    setMsgs(((m ?? []) as Msg[]).reverse())
+    setPeerRead(pr)
+
+    const [m, n, b, rx, ret] = await Promise.all([
+      sb.from('messages').select(COLS).order('created_at', { ascending: false }).limit(500),
+      sb.from('nicknames').select('target_id, nickname').eq('owner_id', uid),
+      sb.from('blocks').select('blocked_id').eq('blocker_id', uid),
+      sb.from('reactions').select('message_id, user_id, emoji').limit(3000),
+      sb.rpc('get_retention'),
+    ])
+    setMsgs(((m.data ?? []) as Msg[]).reverse())
+    const nk: Record<string, string> = {}
+    for (const x of (n.data ?? []) as any[]) nk[x.target_id] = x.nickname
+    setNicks(nk)
+    const bk: Record<string, boolean> = {}
+    for (const x of (b.data ?? []) as any[]) bk[x.blocked_id] = true
+    setBlocked(bk)
+    const rr: Reacts = {}
+    for (const x of (rx.data ?? []) as any[]) {
+      if (!rr[x.message_id]) rr[x.message_id] = {}
+      rr[x.message_id][x.user_id] = x.emoji
+    }
+    setReactions(rr)
+    setRetention(typeof ret.data === 'number' ? ret.data : null)
   }, [])
 
   // Start-up: check sign-in, load data, listen for changes in real time
@@ -129,7 +163,7 @@ export default function ChatShell() {
       const { data: p } = await sb.from('profiles').select('username').eq('id', uid).maybeSingle()
       if (!p) { window.location.hash = '/onboarding'; return }
       if (cancelled) return
-      setMe(uid); setMyName(p.username)
+      setMe(uid)
       await loadAll(uid)
       if (cancelled) return
       channel = sb.channel(`mmc-${uid}-${Math.random().toString(36).slice(2)}`)
@@ -141,6 +175,11 @@ export default function ChatShell() {
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
           const m = payload.new as Msg
           setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...m } : x)))
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
+          if (payload.eventType === 'DELETE') return
+          const r = payload.new as { message_id: string; user_id: string; emoji: string }
+          setReactions((p0) => ({ ...p0, [r.message_id]: { ...(p0[r.message_id] ?? {}), [r.user_id]: r.emoji } }))
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members', filter: `user_id=eq.${uid}` },
           () => loadAll(uid))
@@ -158,15 +197,29 @@ export default function ChatShell() {
     const clean = q.toLowerCase().replace(/[^a-z0-9_]/g, '')
     if (!supabase || !me || clean.length < 2) { setFound([]); return }
     const t = setTimeout(async () => {
-      const { data } = await supabase!.from('profiles').select('id,username')
+      const { data } = await supabase!.from('profiles').select('id,username,avatar_path')
         .ilike('username', `%${clean}%`).neq('id', me).limit(10)
       setFound((data ?? []) as Found[])
     }, 300)
     return () => clearTimeout(t)
   }, [q, me])
-const thread = msgs.filter((m) => m.conversation_id === active)
 
-  // Mark the open chat as read (using the newest message's server time) and scroll down
+  const thread = msgs.filter((m) => m.conversation_id === active)
+
+  // Refresh when the app comes back to the screen
+  useEffect(() => {
+    if (!me) return
+    const on = () => { if (document.visibilityState === 'visible') loadAll(me) }
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [me, loadAll])
+
+  // If the open chat no longer exists, go back to the list
+  useEffect(() => {
+    if (active && !convs.some((c) => c.id === active)) setActive(null)
+  }, [convs, active])
+
+  // Mark the open chat as read (newest message's server time) and scroll down
   useEffect(() => {
     if (!active || !me || !supabase) return
     bottom.current?.scrollIntoView({ block: 'end' })
@@ -178,11 +231,13 @@ const thread = msgs.filter((m) => m.conversation_id === active)
       .eq('conversation_id', active).eq('user_id', me).then(() => {})
   }, [active, me, thread.length])
 
+  const nameOf = (c: Conv) => (c.peerId && nicks[c.peerId]) || c.username
+
   async function startChat(userId: string) {
     if (!supabase || !me) return
     setErr('')
     const { data, error } = await supabase.rpc('start_direct_chat', { other: userId })
-    if (error) { setErr(error.message); return }
+    if (error) { setErr(nice(error.message)); return }
     await loadAll(me)
     setQ(''); setFound([])
     setActive(data as string)
@@ -191,7 +246,7 @@ const thread = msgs.filter((m) => m.conversation_id === active)
   async function addMessage(row: Record<string, unknown>) {
     if (!supabase) return false
     const { data, error } = await supabase.from('messages').insert(row).select(COLS).single()
-    if (error) { setErr(error.message); return false }
+    if (error) { setErr(nice(error.message)); return false }
     const m = data as Msg
     setMsgs((p) => (p.some((x) => x.id === m.id) ? p : [...p, m]))
     return true
@@ -214,7 +269,7 @@ const thread = msgs.filter((m) => m.conversation_id === active)
     const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) : 'bin'
     const path = `${cid}/${crypto.randomUUID()}.${ext}`
     const { error } = await supabase.storage.from('attachments').upload(path, file, { contentType: type })
-    if (error) { setErr(error.message); return }
+    if (error) { setErr(nice(error.message)); return }
     await addMessage({ conversation_id: cid, sender_id: uid, attachment_path: path, attachment_name: name, attachment_type: type })
   }
 
@@ -267,14 +322,85 @@ const thread = msgs.filter((m) => m.conversation_id === active)
     setErr('')
     const when = new Date().toISOString()
     const { error } = await supabase.from('messages').update({ deleted_at: when, body: '' }).eq('id', m.id)
-    if (error) { setErr(error.message); return }
+    if (error) { setErr(nice(error.message)); return }
     setMsgs((p) => p.map((x) => (x.id === m.id ? { ...x, deleted_at: when, body: '' } : x)))
+    setSel(null)
+    if (m.attachment_path) await supabase.storage.from('attachments').remove([m.attachment_path])
+  }
+
+  // Tap an emoji again to remove your reaction. Double-tap a message for a quick heart.
+  async function react(m: Msg, emoji: string) {
+    if (!supabase || !me || m.deleted_at) return
+    const next = reactions[m.id]?.[me] === emoji ? '' : emoji
+    setReactions((p) => ({ ...p, [m.id]: { ...(p[m.id] ?? {}), [me]: next } }))
+    const { error } = await supabase.from('reactions')
+      .upsert({ message_id: m.id, user_id: me, emoji: next }, { onConflict: 'message_id,user_id' })
+    if (error) setErr(nice(error.message))
     setSel(null)
   }
 
-  async function signOut() {
-    await supabase?.auth.signOut()
-    window.location.hash = '/'
+  async function renamePeer(c: Conv) {
+    setMenu(false)
+    if (!supabase || !me || !c.peerId) return
+    const cur = nicks[c.peerId] ?? ''
+    const v = window.prompt(`Name for @${c.username}. Only you can see it. Leave empty to use the username.`, cur)
+    if (v === null) return
+    const name = v.trim().slice(0, 40)
+    const pid = c.peerId
+    if (!name) {
+      await supabase.from('nicknames').delete().eq('owner_id', me).eq('target_id', pid)
+      setNicks((p) => { const q2 = { ...p }; delete q2[pid]; return q2 })
+      return
+    }
+    const { error } = await supabase.from('nicknames')
+      .upsert({ owner_id: me, target_id: pid, nickname: name }, { onConflict: 'owner_id,target_id' })
+    if (error) { setErr(nice(error.message)); return }
+    setNicks((p) => ({ ...p, [pid]: name }))
+  }
+
+  async function toggleBlock(c: Conv) {
+    setMenu(false)
+    if (!supabase || !me || !c.peerId) return
+    const pid = c.peerId
+    if (blocked[pid]) {
+      await supabase.from('blocks').delete().eq('blocker_id', me).eq('blocked_id', pid)
+      setBlocked((p) => ({ ...p, [pid]: false }))
+      return
+    }
+    if (!window.confirm(`Block @${c.username}? You will not be able to message each other.`)) return
+    const { error } = await supabase.from('blocks').upsert({ blocker_id: me, blocked_id: pid })
+    if (error) { setErr(nice(error.message)); return }
+    setBlocked((p) => ({ ...p, [pid]: true }))
+  }
+
+  async function reportPeer(c: Conv) {
+    setMenu(false)
+    if (!supabase || !me || !c.peerId) return
+    const why = window.prompt(`Why are you reporting @${c.username}? (3 to 1000 characters)`)
+    if (why === null) return
+    if (why.trim().length < 3) { setErr('Please write a short reason.'); return }
+    const { error } = await supabase.from('reports')
+      .insert({ reporter_id: me, reported_user_id: c.peerId, reason: why.trim().slice(0, 1000) })
+    setErr(error ? nice(error.message) : '')
+    if (!error) window.alert('Report sent. Thank you.')
+  }
+
+  // Delete a whole chat for everyone in it (files first, then the chat itself)
+  async function deleteChat() {
+    setMenu(false)
+    const cid = activeRef.current
+    if (!supabase || !cid) return
+    if (!window.confirm('Delete this whole chat for both people? This cannot be undone.')) return
+    setErr('')
+    const { data: files } = await supabase.storage.from('attachments').list(cid, { limit: 1000 })
+    if (files && files.length) {
+      await supabase.storage.from('attachments').remove(files.map((f) => `${cid}/${f.name}`))
+    }
+    const { error } = await supabase.rpc('delete_conversation', { cid })
+    if (error) { setErr(nice(error.message)); return }
+    setActive(null)
+    setConvs((cs) => cs.filter((c) => c.id !== cid))
+    setMsgs((ms) => ms.filter((m) => m.conversation_id !== cid))
   }
 
   const unread = (c: Conv) =>
@@ -288,9 +414,11 @@ const thread = msgs.filter((m) => m.conversation_id === active)
     return l.body ?? ''
   }
   const chat = convs.find((c) => c.id === active)
+  const notice = retention ? `Messages older than ${retention} days are deleted automatically.` : ''
 
   if (!me) return <div className="grid h-full place-items-center text-silver-300">Loading...</div>
-return (
+
+  return (
     <div className="flex h-full flex-col bg-navy-950">
       {err && (
         <p role="alert" onClick={() => setErr('')} className="bg-red-900/40 px-4 py-2 text-center text-sm text-red-200">
@@ -301,11 +429,8 @@ return (
         <aside className={`${active ? 'hidden' : 'flex'} w-full flex-col border-r border-navy-700 bg-navy-900 md:flex md:w-80`}>
           <header className="flex items-center gap-3 border-b border-navy-700 p-3">
             <Logo size={40} />
-            <div className="min-w-0 flex-1">
-              <h1 className="font-display text-lg leading-tight text-gold-200">Munshi Chat</h1>
-              <p className="truncate text-xs text-silver-300">@{myName}</p>
-            </div>
-            <button onClick={signOut} className="text-sm text-silver-300 underline">Sign out</button>
+            <h1 className="flex-1 font-display text-lg text-gold-200">Munshi Chat</h1>
+            <a href="#/profile" className="rounded-full border border-gold-400/70 px-3 py-1 text-sm text-gold-200">Profile</a>
           </header>
           <div className="border-b border-navy-700 p-3">
             <input className="field" value={q} onChange={(e) => setQ(e.target.value)}
@@ -319,7 +444,7 @@ return (
               <li key={u.id}>
                 <button onClick={() => startChat(u.id)}
                   className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                  <span className="grid h-11 w-11 place-items-center rounded-full bg-navy-700 text-gold-200">{u.username[0].toUpperCase()}</span>
+                  <Avatar path={u.avatar_path} name={u.username} />
                   <span className="flex-1">@{u.username}<span className="block text-xs text-silver-500">Start chat</span></span>
                 </button>
               </li>
@@ -331,11 +456,11 @@ return (
               const n = unread(c)
               return (
                 <li key={c.id}>
-                  <button onClick={() => setActive(c.id)}
+                  <button onClick={() => { setActive(c.id); setMenu(false); setSel(null) }}
                     className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                    <span className="grid h-11 w-11 place-items-center rounded-full bg-navy-700 text-gold-200">{c.name[0].toUpperCase()}</span>
+                    <Avatar path={c.avatar} name={nameOf(c)} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{c.name}</span>
+                      <span className="block truncate font-medium">{nameOf(c)}</span>
                       <span className="block truncate text-sm text-silver-300">{lastOf(c.id)}</span>
                     </span>
                     {n > 0 && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs">{n}</span>}
@@ -344,24 +469,40 @@ return (
               )
             })}
           </ul>
+          {notice && <p className="border-t border-navy-700 p-3 text-center text-xs text-silver-500">{notice}</p>}
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
           {chat ? (
             <>
-              <header className="flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
+              <header className="relative flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
-                <span className="font-medium">{chat.name}</span>
+                <Avatar path={chat.avatar} name={nameOf(chat)} size={36} />
+                <span className="flex-1 truncate font-medium">{nameOf(chat)}</span>
+                <button onClick={() => setMenu(!menu)} aria-label="Chat options" className="px-2 text-2xl leading-none text-silver-300">&#8942;</button>
+                {menu && (
+                  <div className="absolute right-3 top-14 z-10 w-52 rounded-xl border border-navy-700 bg-navy-800 p-1 text-sm shadow-lg">
+                    {chat.peerId && <button onClick={() => renamePeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Rename this person</button>}
+                    {chat.peerId && <button onClick={() => toggleBlock(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">{blocked[chat.peerId] ? 'Unblock' : 'Block'}</button>}
+                    {chat.peerId && <button onClick={() => reportPeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Report</button>}
+                    <button onClick={deleteChat} className="block w-full rounded-lg px-3 py-2 text-left text-red-300 active:bg-navy-700">Delete chat</button>
+                  </div>
+                )}
               </header>
-              <div className="flex-1 space-y-2 overflow-y-auto p-4">
+              {notice && <p className="bg-navy-900 px-3 py-1 text-center text-[11px] text-silver-500">{notice}</p>}
+              <div className="flex-1 space-y-2 overflow-y-auto p-4" onClick={() => setMenu(false)}>
                 {thread.map((m) => {
                   const mine = m.sender_id === me
                   const pr = peerRead[m.conversation_id]
                   const seen = Boolean(pr) && new Date(pr) >= new Date(m.created_at)
+                  const counts: Record<string, number> = {}
+                  Object.values(reactions[m.id] ?? {}).forEach((e) => { if (e) counts[e] = (counts[e] ?? 0) + 1 })
+                  const myReact = me ? reactions[m.id]?.[me] : ''
                   return (
                     <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                      <div onClick={() => mine && !m.deleted_at && setSel(sel === m.id ? null : m.id)}
-                        className={`max-w-[80%] rounded-2xl px-4 py-2 ${mine ? 'rounded-br-sm bg-bubble text-white' : 'rounded-bl-sm bg-silver-100 text-navy-950'}`}>
+                      <div onClick={() => !m.deleted_at && setSel(sel === m.id ? null : m.id)}
+                        onDoubleClick={() => react(m, HEART)}
+                        className={`max-w-[80%] touch-manipulation rounded-2xl px-4 py-2 ${mine ? 'rounded-br-sm bg-bubble text-white' : 'rounded-bl-sm bg-silver-100 text-navy-950'}`}>
                         {m.deleted_at ? (
                           <p className="italic opacity-70">Message deleted</p>
                         ) : (
@@ -379,10 +520,22 @@ return (
                           )}
                         </p>
                       </div>
-                      {sel === m.id && mine && !m.deleted_at && (
-                        <button onClick={() => deleteMsg(m)} className="mt-1 text-xs text-red-300 underline">
-                          Delete for everyone
-                        </button>
+                      {!m.deleted_at && Object.keys(counts).length > 0 && (
+                        <div className="-mt-1 flex gap-1">
+                          {Object.entries(counts).map(([e, n]) => (
+                            <span key={e} className={`rounded-full px-2 text-xs ${myReact === e ? 'bg-gold-400/30' : 'bg-navy-800'}`}>{e} {n > 1 ? n : ''}</span>
+                          ))}
+                        </div>
+                      )}
+                      {sel === m.id && !m.deleted_at && (
+                        <div className="mt-1 flex flex-wrap items-center gap-3 rounded-full bg-navy-800 px-3 py-1">
+                          {EMOJIS.map((e) => (
+                            <button key={e} onClick={() => react(m, e)} className="text-xl">{e}</button>
+                          ))}
+                          {mine && (
+                            <button onClick={() => deleteMsg(m)} className="text-xs text-red-300 underline">Delete for everyone</button>
+                          )}
+                        </div>
                       )}
                     </div>
                   )
@@ -392,9 +545,7 @@ return (
 
               {recording ? (
                 <div className="flex items-center gap-3 border-t border-navy-700 bg-navy-900 p-3">
-                  <span className="flex-1 text-sm text-gold-200">
-                    Recording {recSec}s / {MAX_VOICE_SECONDS}s
-                  </span>
+                  <span className="flex-1 text-sm text-gold-200">Recording {recSec}s / {MAX_VOICE_SECONDS}s</span>
                   <button onClick={cancelRec} className="text-sm text-silver-300 underline">Cancel</button>
                   <button onClick={stopRec} aria-label="Send voice message"
                     className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-b from-gold-200 to-gold-400 text-navy-950 active:scale-95">
@@ -429,4 +580,4 @@ return (
       </div>
     </div>
   )
-                                       }
+}

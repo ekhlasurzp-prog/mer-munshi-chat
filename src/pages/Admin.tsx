@@ -1,0 +1,200 @@
+import { useCallback, useEffect, useState } from 'react'
+import Logo from '../components/Logo'
+import { supabase } from '../lib/supabase'
+
+type Phase = 'loading' | 'denied' | 'enroll' | 'verify' | 'ready'
+
+export default function Admin() {
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [factorId, setFactorId] = useState('')
+  const [qr, setQr] = useState('')
+  const [secret, setSecret] = useState('')
+  const [code, setCode] = useState('')
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+  const [stats, setStats] = useState<any>(null)
+  const [users, setUsers] = useState<any[]>([])
+  const [reports, setReports] = useState<any[]>([])
+  const [audit, setAudit] = useState<any[]>([])
+  const [ret, setRet] = useState('0')
+
+  const load = useCallback(async () => {
+    const sb = supabase
+    if (!sb) return
+    const [s, u, r, a] = await Promise.all([
+      sb.rpc('admin_stats'), sb.rpc('admin_list_users'), sb.rpc('admin_list_reports'), sb.rpc('admin_audit'),
+    ])
+    const bad = s.error || u.error || r.error || a.error
+    if (bad) { setErr(bad.message); return }
+    setStats(s.data); setUsers((u.data ?? []) as any[]); setReports((r.data ?? []) as any[]); setAudit((a.data ?? []) as any[])
+    setRet(String((s.data as any)?.retention_days ?? 0))
+    setPhase('ready')
+  }, [])
+
+  const init = useCallback(async () => {
+    const sb = supabase
+    if (!sb) { window.location.hash = '/login'; return }
+    const { data: u } = await sb.auth.getUser()
+    if (!u.user) { window.location.hash = '/login'; return }
+    const { data: isAdmin } = await sb.rpc('am_i_admin')
+    if (isAdmin !== true) { setPhase('denied'); return }
+    const { data: aal } = await sb.auth.mfa.getAuthenticatorAssuranceLevel()
+    if (aal?.currentLevel === 'aal2') { await load(); return }
+    const { data: f } = await sb.auth.mfa.listFactors()
+    const verified = f?.totp?.find((x) => x.status === 'verified')
+    if (verified) { setFactorId(verified.id); setPhase('verify'); return }
+    // First time: set up an authenticator app
+    for (const x of f?.all ?? []) if (x.status !== 'verified') await sb.auth.mfa.unenroll({ factorId: x.id })
+    const { data, error } = await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Munshi Admin' })
+    if (error || !data) { setErr(error?.message ?? 'Could not start two-step setup'); setPhase('enroll'); return }
+    setFactorId(data.id); setQr(data.totp.qr_code); setSecret(data.totp.secret); setPhase('enroll')
+  }, [load])
+
+  useEffect(() => { init() }, [init])
+
+  async function verify() {
+    setErr('')
+    const { error } = await supabase!.auth.mfa.challengeAndVerify({ factorId, code: code.trim() })
+    if (error) { setErr(error.message); return }
+    setCode('')
+    await init()
+  }
+
+  async function saveRet() {
+    const days = Number(ret)
+    if (days > 0 && !window.confirm(
+      `Messages older than ${days} days will be permanently deleted for everyone, from the database and file storage. Continue?`)) return
+    const { error } = await supabase!.rpc('admin_set_retention', { days })
+    setNote(error ? error.message : 'Saved.')
+    if (!error) load()
+  }
+
+  async function runNow() {
+    if (!window.confirm('Run the cleanup now? Old messages will be deleted permanently.')) return
+    setNote('Running...')
+    const { data, error } = await supabase!.functions.invoke('cleanup', { body: { action: 'run_retention' } })
+    if (error) { setNote(error.message); return }
+    setNote(data?.skipped ? 'Automatic deletion is off.' : `Deleted ${data?.deleted ?? 0} messages and ${data?.files ?? 0} files.`)
+    load()
+  }
+
+  async function suspend(id: string, flag: boolean) {
+    const { error } = await supabase!.rpc('admin_set_suspended', { target: id, flag })
+    if (error) setNote(error.message); else load()
+  }
+
+  async function setReport(id: string, status: string) {
+    const { error } = await supabase!.rpc('admin_set_report_status', { rid: id, new_status: status })
+    if (error) setNote(error.message); else load()
+  }
+
+  const shell = (children: React.ReactNode) => (
+    <div className="mx-auto min-h-full max-w-2xl px-4 py-6">
+      <div className="flex items-center gap-3">
+        <Logo size={44} />
+        <h1 className="flex-1 font-display text-2xl text-gold-200">Admin</h1>
+        <a href="#/chat" className="text-sm text-gold-200 underline">Back to chats</a>
+      </div>
+      {err && <p role="alert" className="mt-3 text-sm text-red-300">{err}</p>}
+      {children}
+    </div>
+  )
+
+  if (phase === 'loading') return shell(<p className="mt-6 text-silver-300">Loading...</p>)
+  if (phase === 'denied') return shell(<p className="mt-6 text-silver-300">You do not have access to this page.</p>)
+
+  if (phase === 'enroll' || phase === 'verify') {
+    return shell(
+      <div className="mt-6 space-y-3">
+        <h2 className="text-lg text-gold-200">Two-step verification</h2>
+        {phase === 'enroll' ? (
+          <>
+            <p className="text-sm text-silver-300">
+              Install an authenticator app (Google Authenticator, Microsoft Authenticator or Aegis). Choose "Enter a setup key" and type this key, then enter the 6-digit code it shows.
+            </p>
+            {secret && <p className="break-all rounded-xl bg-navy-900 p-3 font-mono text-sm">{secret}</p>}
+            {qr && <img src={qr} alt="QR code" className="mx-auto h-40 w-40 rounded-lg bg-white p-2" />}
+          </>
+        ) : (
+          <p className="text-sm text-silver-300">Enter the 6-digit code from your authenticator app.</p>
+        )}
+        <input className="field" inputMode="numeric" maxLength={6} value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="123456" />
+        <button onClick={verify} disabled={code.length !== 6} className="btn-gold w-full disabled:opacity-40">Verify</button>
+      </div>)
+  }
+
+  return shell(
+    <>
+      <p className="mt-2 text-xs text-silver-500">Admins cannot read message text from this panel.</p>
+      {stats && (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-center">
+          {[['Users', stats.users], ['Suspended', stats.suspended], ['Chats', stats.conversations],
+            ['Messages', stats.messages], ['Open reports', stats.open_reports]].map(([k, v]) => (
+            <div key={String(k)} className="rounded-xl bg-navy-900 p-3">
+              <p className="text-2xl text-gold-200">{String(v)}</p><p className="text-xs text-silver-300">{k}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 className="mt-8 text-lg text-gold-200">Automatic deletion of old messages</h2>
+      <p className="text-xs text-silver-500">Applies to every user. Deleted messages and files cannot be recovered.</p>
+      <div className="mt-2 space-y-2">
+        {[['0', 'Off (keep all messages)'], ['3', 'Delete after 3 days'], ['10', 'Delete after 10 days'], ['30', 'Delete after 1 month']].map(([v, label]) => (
+          <label key={v} className="flex items-center gap-3 rounded-xl bg-navy-900 p-3">
+            <input type="radio" name="ret" checked={ret === v} onChange={() => setRet(v)} />
+            {label}
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 flex gap-3">
+        <button onClick={saveRet} className="btn-gold flex-1">Save</button>
+        <button onClick={runNow} className="btn-ghost flex-1">Run cleanup now</button>
+      </div>
+      {note && <p className="mt-2 text-sm text-gold-200">{note}</p>}
+
+      <h2 className="mt-8 text-lg text-gold-200">Reports</h2>
+      {reports.length === 0 && <p className="text-sm text-silver-500">No reports.</p>}
+      <ul className="space-y-2">
+        {reports.map((r) => (
+          <li key={r.id} className="rounded-xl bg-navy-900 p-3 text-sm">
+            <p><b>@{r.reporter}</b> reported <b>@{r.reported ?? 'deleted user'}</b></p>
+            <p className="mt-1 text-silver-300">{r.reason}</p>
+            <div className="mt-2 flex gap-2 text-xs">
+              {['open', 'reviewing', 'closed'].map((s) => (
+                <button key={s} onClick={() => setReport(r.id, s)}
+                  className={`rounded-full border px-3 py-1 ${r.status === s ? 'border-gold-400 text-gold-200' : 'border-navy-700 text-silver-300'}`}>{s}</button>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <h2 className="mt-8 text-lg text-gold-200">Users</h2>
+      <ul className="space-y-2">
+        {users.map((u) => (
+          <li key={u.id} className="flex items-center gap-3 rounded-xl bg-navy-900 p-3 text-sm">
+            <span className="min-w-0 flex-1">
+              <b>@{u.username}</b>{u.suspended && <span className="ml-2 text-red-300">suspended</span>}
+              <span className="block text-xs text-silver-500">{new Date(u.created_at).toLocaleDateString()} &middot; {u.message_count} messages</span>
+            </span>
+            <button onClick={() => suspend(u.id, !u.suspended)}
+              className="rounded-full border border-gold-400/60 px-3 py-1 text-xs text-gold-200">
+              {u.suspended ? 'Unsuspend' : 'Suspend'}
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <h2 className="mt-8 text-lg text-gold-200">Audit log</h2>
+      <ul className="mb-10 space-y-1 text-xs text-silver-300">
+        {audit.map((a, i) => (
+          <li key={i} className="rounded-lg bg-navy-900 p-2">
+            {new Date(a.created_at).toLocaleString()} &middot; {a.admin} &middot; {a.action}
+            {a.details ? ` ${JSON.stringify(a.details)}` : ''}
+          </li>
+        ))}
+      </ul>
+    </>)
+}
