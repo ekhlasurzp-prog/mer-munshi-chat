@@ -7,13 +7,16 @@ import Profile from './pages/Profile'
 import Admin from './pages/Admin'
 import Legal from './pages/Legal'
 import NotifyBar from './components/NotifyBar'
+import Splash from './components/Splash'
 import { supabase } from './lib/supabase'
 
 // Simple hash routing keeps the project dependency-free for now.
 const route = () => window.location.hash.replace(/^#/, '') || '/'
+let splashShown = false // the intro plays once each time the app is opened
 
 export default function App() {
   const [path, setPath] = useState(route())
+  const [splash, setSplash] = useState(!splashShown)
   useEffect(() => {
     const on = () => setPath(route())
     window.addEventListener('hashchange', on)
@@ -27,20 +30,27 @@ export default function App() {
     return () => window.removeEventListener('hashchange', on)
   }, [])
 
-  if (path === '/login') return <Auth mode="login" />
-  if (path === '/signup') return <Auth mode="signup" />
-  if (path === '/onboarding') return <Onboarding />
-  if (path === '/profile') return <Profile />
-  if (path === '/admin') return <Admin />
-  if (path === '/privacy') return <Legal kind="privacy" />
-  if (path === '/terms') return <Legal kind="terms" />
-  if (path === '/chat') {
-    return (
+  let view
+  if (path === '/login') view = <Auth mode="login" />
+  else if (path === '/signup') view = <Auth mode="signup" />
+  else if (path === '/onboarding') view = <Onboarding />
+  else if (path === '/profile') view = <Profile />
+  else if (path === '/admin') view = <Admin />
+  else if (path === '/privacy') view = <Legal kind="privacy" />
+  else if (path === '/terms') view = <Legal kind="terms" />
+  else if (path === '/chat') {
+    view = (
       <div className="flex h-full flex-col">
         <NotifyBar />
         <div className="min-h-0 flex-1"><ChatShell /></div>
       </div>
     )
-  }
-  return <Landing />
+  } else view = <Landing />
+
+  return (
+    <>
+      {view}
+      {splash && <Splash onDone={() => { splashShown = true; setSplash(false) }} />}
+    </>
+  )
 }
