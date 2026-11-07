@@ -2,7 +2,11 @@
    (no message text is sent through push). */
 const CACHE = 'mmc-shell-v1'
 
-self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('install', (e) => {
+  self.skipWaiting()
+  // Save the intro video so it also plays offline
+  e.waitUntil(caches.open(CACHE).then((c) => c.add('/splash.mp4')).catch(() => {}))
+})
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys()
@@ -31,7 +35,7 @@ self.addEventListener('fetch', (e) => {
     return
   }
 
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/') || url.pathname === '/logo.png') {
+  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/') || url.pathname === '/logo.png' || url.pathname === '/splash.mp4') {
     e.respondWith(
       caches.match(req).then((hit) => hit || fetch(req).then((res) => {
         const copy = res.clone()
