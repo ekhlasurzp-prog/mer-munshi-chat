@@ -36,6 +36,20 @@ const PlaneIcon = () => (
   </svg>
 )
 
+const svgp = { viewBox: '0 0 24 24', width: 24, height: 24, fill: 'currentColor', 'aria-hidden': true } as const
+const ChatIcon = () => (<svg {...svgp}><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /></svg>)
+const PeopleIcon = () => (<svg {...svgp}><circle cx="9" cy="8" r="3.5" /><path d="M2 20c0-3.6 3-6 7-6s7 2.4 7 6z" /><circle cx="17.5" cy="9" r="2.5" /><path d="M17.5 14c3 0 4.5 2 4.5 5h-4c0-2-.4-3.6-1.2-4.8z" /></svg>)
+const BellIcon = () => (<svg {...svgp}><path d="M12 22a2.5 2.5 0 0 0 2.4-2H9.6A2.5 2.5 0 0 0 12 22z" /><path d="M18 16V11a6 6 0 0 0-4.5-5.8V4.5a1.5 1.5 0 0 0-3 0v.7A6 6 0 0 0 6 11v5l-2 2v1h16v-1z" /></svg>)
+const UserIcon = () => (<svg {...svgp}><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z" /></svg>)
+const NewChatIcon = () => (<svg {...svgp}><path fillRule="evenodd" d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm9 3h-2v3H8v2h3v3h2v-3h3V9h-3z" /></svg>)
+const SparkIcon = () => (
+  <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden>
+    <defs><linearGradient id="sparkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#FFE08A" /><stop offset="1" stopColor="#1E90FF" /></linearGradient></defs>
+    <path fill="url(#sparkg)" d="M12 2l2.2 6.3L21 10.5l-6.8 2.2L12 20l-2.2-7.3L3 10.5l6.8-2.2z" />
+    <path fill="url(#sparkg)" d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" />
+  </svg>
+)
+
 // Long messages are shortened with a "See more" toggle
 function Body({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
@@ -96,6 +110,8 @@ export default function ChatShell() {
   const [joined, setJoined] = useState('')
   const [welcome, setWelcome] = useState('')
   const [seenAt, setSeenAt] = useState(readSeen)
+  const [tab, setTab] = useState<'chats' | 'contacts'>('chats')
+  const searchRef = useRef<HTMLInputElement>(null)
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
   const bottom = useRef<HTMLDivElement>(null)
@@ -326,7 +342,7 @@ export default function ChatShell() {
     const { data, error } = await supabase.rpc('start_direct_chat', { other: userId })
     if (error) { setErr(nice(error.message)); return }
     await loadAll(me)
-    setQ(''); setFound([])
+    setQ(''); setFound([]); setTab('chats')
     setActive(data as string)
   }
 
@@ -503,8 +519,19 @@ export default function ChatShell() {
     return l.body ?? ''
   }
   const chat = convs.find((c) => c.id === active)
+  const totalUnread = convs.reduce((n, c) => n + unread(c), 0)
   const chatPeers = new Set(convs.map((c) => c.peerId))
-  const contactsOnly = contacts.filter((c) => !chatPeers.has(c.id))
+
+  // Opens OpenAI (ChatGPT) in the browser. This is our own button, not an official OpenAI one.
+  function openAI() {
+    let ok = false
+    try { ok = localStorage.getItem('mmc-ai-ok') === '1' } catch { /* ignore */ }
+    if (!ok) {
+      if (!window.confirm(`This opens OpenAI (ChatGPT) in your browser. What you write there is handled by OpenAI, not by ${brand.name}. Continue?`)) return
+      try { localStorage.setItem('mmc-ai-ok', '1') } catch { /* ignore */ }
+    }
+    window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
+  }
 
   async function removeContact(id: string) {
     if (!supabase || !me) return
@@ -530,18 +557,22 @@ export default function ChatShell() {
         </p>
       )}
       <div className="flex min-h-0 flex-1">
-        <aside className={`${active ? 'hidden' : 'flex'} w-full flex-col border-r border-navy-700 bg-navy-900 md:flex md:w-80`}>
+        <aside className={`${active ? 'hidden' : 'relative flex'} w-full flex-col border-r border-navy-700 bg-navy-900 md:flex md:w-80`}>
           <header className="flex items-center gap-3 border-b border-navy-700 p-3">
             <Logo size={40} />
             <h1 className="min-w-0 flex-1 truncate font-display text-lg text-gold-200">{brand.name}</h1>
             <a href="#/profile" className="rounded-full border border-gold-400/70 px-3 py-1 text-sm text-gold-200">Profile</a>
           </header>
-          <div className="border-b border-navy-700 p-3">
-            <input className="field" value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="Find a username" autoCapitalize="none" autoCorrect="off" />
-          </div>
+          {tab === 'chats' ? (
+            <div className="border-b border-navy-700 p-3">
+              <input ref={searchRef} className="field" value={q} onChange={(e) => setQ(e.target.value)}
+                placeholder="Find a username" autoCapitalize="none" autoCorrect="off" />
+            </div>
+          ) : (
+            <p className="border-b border-navy-700 px-4 py-3 text-lg text-gold-200">Contacts</p>
+          )}
           <ul className="flex-1 overflow-y-auto">
-            {!q && official.length > 0 && (
+            {tab === 'chats' && !q && official.length > 0 && (
               <li>
                 <button onClick={() => { setActive(OFFICIAL); setMenu(false) }}
                   className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
@@ -557,10 +588,10 @@ export default function ChatShell() {
                 </button>
               </li>
             )}
-            {q.trim().length >= 2 && found.length === 0 && (
+            {tab === 'chats' && q.trim().length >= 2 && found.length === 0 && (
               <li className="p-4 text-sm text-silver-500">No users found.</li>
             )}
-            {found.map((u) => (
+            {tab === 'chats' && found.map((u) => (
               <li key={u.id}>
                 <button onClick={() => startChat(u.id)}
                   className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
@@ -569,10 +600,10 @@ export default function ChatShell() {
                 </button>
               </li>
             ))}
-            {!q && convs.length === 0 && (
+            {tab === 'chats' && !q && convs.length === 0 && (
               <li className="p-4 text-sm text-silver-300">No chats yet. Search for a username above to start one.</li>
             )}
-            {!q && convs.map((c) => {
+            {tab === 'chats' && !q && convs.map((c) => {
               const n = unread(c)
               return (
                 <li key={c.id}>
@@ -588,26 +619,60 @@ export default function ChatShell() {
                 </li>
               )
             })}
-            {!q && contactsOnly.length > 0 && (
-              <>
-                <li className="bg-navy-950 px-3 py-1 text-xs uppercase tracking-wide text-silver-500">Contacts</li>
-                {contactsOnly.map((c) => (
-                  <li key={c.id} className="flex items-center border-b border-navy-800">
-                    <button onClick={() => startChat(c.id)}
-                      className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-navy-800">
-                      <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{nicks[c.id] || c.username}</span>
-                        <span className="block text-xs text-silver-500">Tap to chat</span>
-                      </span>
-                    </button>
-                    <button onClick={() => removeContact(c.id)} className="px-3 text-xs text-silver-500 underline">Remove</button>
-                  </li>
-                ))}
-              </>
+            {tab === 'contacts' && contacts.length === 0 && (
+              <li className="p-4 text-sm text-silver-300">
+                No contacts yet. People you chat with are saved here, even if you delete the chat.
+              </li>
             )}
+            {tab === 'contacts' && contacts.map((c) => (
+              <li key={c.id} className="flex items-center border-b border-navy-800">
+                <button onClick={() => startChat(c.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-navy-800">
+                  <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{nicks[c.id] || c.username}</span>
+                    <span className="block text-xs text-silver-500">{chatPeers.has(c.id) ? 'Open chat' : 'Tap to chat'}</span>
+                  </span>
+                </button>
+                <button onClick={() => removeContact(c.id)} className="px-3 text-xs text-silver-500 underline">Remove</button>
+              </li>
+            ))}
           </ul>
           {notice && <p className="border-t border-navy-700 p-3 text-center text-xs text-silver-500">{notice}</p>}
+
+          <div className="pointer-events-none absolute bottom-28 right-4 z-10 flex flex-col items-end gap-3">
+            <button onClick={openAI} aria-label="Open AI chat" title="Open AI"
+              className="pointer-events-auto grid h-12 w-12 place-items-center rounded-2xl bg-navy-800 shadow-lg ring-1 ring-navy-700 active:scale-95">
+              <SparkIcon />
+            </button>
+            <button
+              onClick={() => { setTab('chats'); setQ(''); window.setTimeout(() => searchRef.current?.focus(), 60) }}
+              aria-label="New chat" title="New chat"
+              className="pointer-events-auto grid h-14 w-14 place-items-center rounded-2xl bg-white text-navy-950 shadow-lg active:scale-95">
+              <NewChatIcon />
+            </button>
+          </div>
+
+          <nav className="flex border-t border-navy-700 bg-navy-900 px-1 pb-1 pt-2">
+            {[
+              { key: 'chats', label: 'Chats', icon: <ChatIcon />, badge: totalUnread, active: tab === 'chats', on: () => setTab('chats') },
+              { key: 'contacts', label: 'Contacts', icon: <PeopleIcon />, badge: 0, active: tab === 'contacts', on: () => setTab('contacts') },
+              { key: 'updates', label: 'Updates', icon: <BellIcon />, badge: officialUnread, active: false, on: () => { setActive(OFFICIAL); setMenu(false) } },
+              { key: 'me', label: 'Profile', icon: <UserIcon />, badge: 0, active: false, on: () => { window.location.hash = '/profile' } },
+            ].map((t) => (
+              <button key={t.key} onClick={t.on} className="flex flex-1 flex-col items-center gap-1 text-xs">
+                <span className={`relative grid h-8 w-14 place-items-center rounded-full ${t.active ? 'bg-navy-700 text-gold-200' : 'text-silver-300'}`}>
+                  {t.icon}
+                  {t.badge > 0 && (
+                    <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-emerald-500 px-1 text-center text-[10px] font-bold text-white">
+                      {t.badge > 99 ? '99+' : t.badge}
+                    </span>
+                  )}
+                </span>
+                <span className={t.active ? 'font-semibold text-silver-100' : 'text-silver-300'}>{t.label}</span>
+              </button>
+            ))}
+          </nav>
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
