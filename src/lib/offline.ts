@@ -9,6 +9,9 @@ export type Snapshot = {
   nicks: Record<string, string>
   peerRead: Record<string, string>
   anns: any[]
+  contacts?: any[]
+  joined?: string
+  welcome?: string
 }
 
 export function readCache(): Snapshot | null {
