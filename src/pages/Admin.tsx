@@ -32,6 +32,7 @@ export default function Admin() {
   const [logoPath, setLogoPath] = useState('')
   const [anns, setAnns] = useState<any[]>([])
   const [annText, setAnnText] = useState('')
+  const [welcome, setWelcome] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
@@ -44,13 +45,15 @@ export default function Admin() {
     if (bad) { setErr(bad.message); return }
     setStats(s.data); setUsers((u.data ?? []) as any[]); setReports((r.data ?? []) as any[]); setAudit((a.data ?? []) as any[])
     setRet(String((s.data as any)?.retention_days ?? 0))
-    const [b, an] = await Promise.all([
+    const [b, an, w] = await Promise.all([
       sb.rpc('get_branding'),
       sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(20),
+      sb.rpc('get_welcome'),
     ])
     const br = b.data as any
     if (br) { setBrandName(br.name ?? ''); setLogoPath(br.logo_path ?? '') }
     setAnns((an.data ?? []) as any[])
+    setWelcome(typeof w.data === 'string' ? w.data : '')
     setPhase('ready')
   }, [])
 
@@ -138,6 +141,12 @@ export default function Admin() {
     setLogoPath('')
     await refreshBrand()
     setNote('Original logo restored.')
+  }
+
+  async function saveWelcome(txt: string) {
+    const { error } = await supabase!.rpc('admin_set_welcome', { txt })
+    setNote(error ? error.message : txt ? 'Welcome message saved.' : 'Welcome message reset to the default.')
+    if (!error) load()
   }
 
   async function postAnn() {
@@ -245,8 +254,16 @@ export default function Admin() {
         The icon and name on phone home screens come from the install file, so they change only after an update and reinstall.
       </p>
 
+      <h2 className="mt-8 text-lg text-gold-200">Welcome message for new users</h2>
+      <p className="text-xs text-silver-500">New users get this as the first message in the official chat. It shows the default text until you change it.</p>
+      <textarea className="field mt-2 h-28" maxLength={1000} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
+      <div className="mt-2 flex gap-3">
+        <button onClick={() => saveWelcome(welcome)} disabled={!welcome.trim()} className="btn-gold flex-1 disabled:opacity-40">Save welcome</button>
+        <button onClick={() => saveWelcome('')} className="btn-ghost flex-1">Use default</button>
+      </div>
+
       <h2 className="mt-8 text-lg text-gold-200">Message all users</h2>
-      <p className="text-xs text-silver-500">Appears at the top of everyone's chat list. Good for app updates.</p>
+      <p className="text-xs text-silver-500">Appears as a chat from the app name in everyone's chat list. Good for app updates.</p>
       <textarea className="field mt-2 h-28" maxLength={1000} value={annText} onChange={(e) => setAnnText(e.target.value)} placeholder="Write an update for all users" />
       <button onClick={postAnn} disabled={!annText.trim()} className="btn-gold mt-2 w-full disabled:opacity-40">Send to all users</button>
       <ul className="mt-3 space-y-2 text-sm">

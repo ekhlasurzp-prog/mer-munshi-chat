@@ -14,8 +14,11 @@ type Conv = { id: string; type: string; username: string; peerId: string | null;
 type Found = { id: string; username: string; avatar_path: string | null }
 type Reacts = Record<string, Record<string, string>>
 type Ann = { id: string; body: string; created_at: string }
+type Contact = { id: string; username: string; avatar: string | null }
+const OFFICIAL = 'official'
+const readSeen = () => { try { return localStorage.getItem('mmc-official-seen') || '' } catch { return '' } }
+const fmtDate = (s: string) => new Date(s).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
 const OFFLINE_MSG = 'You are offline. You can read saved messages, but sending needs internet.'
-const readDismissed = (): string[] => { try { return JSON.parse(localStorage.getItem('mmc-dismissed') || '[]') } catch { return [] } }
 
 const COLS = 'id,conversation_id,sender_id,body,created_at,deleted_at,attachment_path,attachment_name,attachment_type'
 const EMOJIS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}']
@@ -89,7 +92,10 @@ export default function ChatShell() {
   const [recording, setRecording] = useState(false)
   const [recSec, setRecSec] = useState(0)
   const [anns, setAnns] = useState<Ann[]>([])
-  const [dismissed, setDismissed] = useState<string[]>(readDismissed)
+  const [contacts, setContacts] = useState<Contact[]>([])
+  const [joined, setJoined] = useState('')
+  const [welcome, setWelcome] = useState('')
+  const [seenAt, setSeenAt] = useState(readSeen)
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
   const bottom = useRef<HTMLDivElement>(null)
@@ -144,13 +150,16 @@ export default function ChatShell() {
         }
       })
 
-      const [m, n, b, rx, ret, an] = await Promise.all([
+      const [m, n, b, rx, ret, an, pf, wl, ct] = await Promise.all([
         sb.from('messages').select(COLS).order('created_at', { ascending: false }).limit(500),
         sb.from('nicknames').select('target_id, nickname').eq('owner_id', uid),
         sb.from('blocks').select('blocked_id').eq('blocker_id', uid),
         sb.from('reactions').select('message_id, user_id, emoji').limit(3000),
         sb.rpc('get_retention'),
-        sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(10),
+        sb.from('announcements').select('id, body, created_at').order('created_at', { ascending: false }).limit(30),
+        sb.from('profiles').select('created_at').eq('id', uid).maybeSingle(),
+        sb.rpc('get_welcome'),
+        sb.from('contacts').select('contact_id').eq('owner_id', uid),
       ])
       if (m.error) { setOnline(false); return }
       const msgList = ((m.data ?? []) as Msg[]).reverse()
@@ -164,12 +173,23 @@ export default function ChatShell() {
         rr[x.message_id][x.user_id] = x.emoji
       }
       const annList = (an.data ?? []) as Ann[]
+      let contactList: Contact[] = []
+      const cids = ((ct.data ?? []) as any[]).map((x) => x.contact_id)
+      if (cids.length) {
+        const { data: cp } = await sb.from('profiles').select('id, username, avatar_path').in('id', cids)
+        contactList = ((cp ?? []) as any[]).map((x) => ({ id: x.id, username: x.username, avatar: x.avatar_path }))
+      }
+      const joinedAt = (pf.data as any)?.created_at ?? ''
+      const welcomeText = typeof wl.data === 'string' ? wl.data : ''
 
       setConvs(convList); setPeerRead(pr); setMsgs(msgList); setNicks(nk); setBlocked(bk)
-      setReactions(rr); setAnns(annList)
+      setReactions(rr); setAnns(annList); setContacts(contactList); setJoined(joinedAt); setWelcome(welcomeText)
       setRetention(typeof ret.data === 'number' ? ret.data : null)
       setOnline(true)
-      writeCache({ uid, convs: convList, msgs: msgList, nicks: nk, peerRead: pr, anns: annList })
+      writeCache({
+        uid, convs: convList, msgs: msgList, nicks: nk, peerRead: pr, anns: annList,
+        contacts: contactList, joined: joinedAt, welcome: welcomeText,
+      })
     } catch {
       setOnline(false)
     }
@@ -186,6 +206,7 @@ export default function ChatShell() {
       if (cached) {
         setMe(cached.uid); setConvs(cached.convs); setMsgs(cached.msgs)
         setNicks(cached.nicks); setPeerRead(cached.peerRead); setAnns(cached.anns)
+        setContacts(cached.contacts ?? []); setJoined(cached.joined ?? ''); setWelcome(cached.welcome ?? '')
       }
       const { data, error } = await sb.auth.getUser()
       let uid = data.user?.id
@@ -197,6 +218,7 @@ export default function ChatShell() {
       }
       if (cached && cached.uid !== uid) {
         clearCache(); setConvs([]); setMsgs([]); setNicks({}); setPeerRead({}); setAnns([])
+        setContacts([]); setJoined(''); setWelcome('')
       }
       if (navigator.onLine) {
         const { data: p } = await sb.from('profiles').select('username').eq('id', uid).maybeSingle()
@@ -250,6 +272,19 @@ export default function ChatShell() {
 
   const thread = msgs.filter((m) => m.conversation_id === active)
 
+  // The official chat from the app: welcome message + admin announcements (read only)
+  const official = [
+    ...(welcome ? [{ id: 'welcome', body: welcome, created_at: joined || '1970-01-01T00:00:00Z' }] : []),
+    ...anns.filter((a) => !joined || new Date(a.created_at) >= new Date(joined)),
+  ].sort((x, y) => new Date(x.created_at).getTime() - new Date(y.created_at).getTime())
+  const officialUnread = official.filter((i) => !seenAt || new Date(i.created_at) > new Date(seenAt)).length
+  useEffect(() => {
+    if (active !== OFFICIAL || !official.length) return
+    const last = official[official.length - 1].created_at
+    setSeenAt(last)
+    try { localStorage.setItem('mmc-official-seen', last) } catch { /* ignore */ }
+  }, [active, official.length])
+
   // Refresh when the app comes back to the screen
   useEffect(() => {
     if (!me) return
@@ -268,7 +303,7 @@ export default function ChatShell() {
 
   // If the open chat no longer exists, go back to the list
   useEffect(() => {
-    if (active && !convs.some((c) => c.id === active)) setActive(null)
+    if (active && active !== OFFICIAL && !convs.some((c) => c.id === active)) setActive(null)
   }, [convs, active])
 
   // Mark the open chat as read (newest message's server time) and scroll down
@@ -444,7 +479,7 @@ export default function ChatShell() {
     setMenu(false)
     const cid = activeRef.current
     if (!supabase || !cid) return
-    if (!window.confirm('Delete this whole chat for both people? This cannot be undone.')) return
+    if (!window.confirm('Delete this whole chat for both people? This cannot be undone. The person stays in your contacts.')) return
     setErr('')
     const { data: files } = await supabase.storage.from('attachments').list(cid, { limit: 1000 })
     if (files && files.length) {
@@ -468,12 +503,16 @@ export default function ChatShell() {
     return l.body ?? ''
   }
   const chat = convs.find((c) => c.id === active)
-  const visibleAnns = anns.filter((a) => !dismissed.includes(a.id)).slice(0, 3)
-  const dismissAnn = (id: string) => {
-    const next = [...dismissed, id].slice(-50)
-    setDismissed(next)
-    try { localStorage.setItem('mmc-dismissed', JSON.stringify(next)) } catch { /* ignore */ }
+  const chatPeers = new Set(convs.map((c) => c.peerId))
+  const contactsOnly = contacts.filter((c) => !chatPeers.has(c.id))
+
+  async function removeContact(id: string) {
+    if (!supabase || !me) return
+    if (!window.confirm('Remove this person from your contacts?')) return
+    await supabase.from('contacts').delete().eq('owner_id', me).eq('contact_id', id)
+    setContacts((p) => p.filter((c) => c.id !== id))
   }
+
   const notice = retention ? `Messages older than ${retention} days are deleted automatically.` : ''
 
   if (!me) return <div className="grid h-full place-items-center text-silver-300">Loading...</div>
@@ -502,13 +541,22 @@ export default function ChatShell() {
               placeholder="Find a username" autoCapitalize="none" autoCorrect="off" />
           </div>
           <ul className="flex-1 overflow-y-auto">
-            {!q && visibleAnns.map((a) => (
-              <li key={a.id} className="border-b border-navy-800 bg-gold-400/10 p-3 text-sm">
-                <p className="text-xs font-semibold text-gold-200">Update from {brand.name}</p>
-                <p className="mt-1 whitespace-pre-wrap break-words">{a.body}</p>
-                <button onClick={() => dismissAnn(a.id)} className="mt-2 text-xs text-silver-300 underline">Dismiss</button>
+            {!q && official.length > 0 && (
+              <li>
+                <button onClick={() => { setActive(OFFICIAL); setMenu(false) }}
+                  className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
+                  <Logo size={44} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 font-medium">
+                      <span className="truncate">{brand.name}</span>
+                      <span className="rounded-full bg-gold-400/20 px-2 text-[10px] text-gold-200">Official</span>
+                    </span>
+                    <span className="block truncate text-sm text-silver-300">{official[official.length - 1].body}</span>
+                  </span>
+                  {officialUnread > 0 && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs">{officialUnread}</span>}
+                </button>
               </li>
-            ))}
+            )}
             {q.trim().length >= 2 && found.length === 0 && (
               <li className="p-4 text-sm text-silver-500">No users found.</li>
             )}
@@ -540,12 +588,52 @@ export default function ChatShell() {
                 </li>
               )
             })}
+            {!q && contactsOnly.length > 0 && (
+              <>
+                <li className="bg-navy-950 px-3 py-1 text-xs uppercase tracking-wide text-silver-500">Contacts</li>
+                {contactsOnly.map((c) => (
+                  <li key={c.id} className="flex items-center border-b border-navy-800">
+                    <button onClick={() => startChat(c.id)}
+                      className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-navy-800">
+                      <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{nicks[c.id] || c.username}</span>
+                        <span className="block text-xs text-silver-500">Tap to chat</span>
+                      </span>
+                    </button>
+                    <button onClick={() => removeContact(c.id)} className="px-3 text-xs text-silver-500 underline">Remove</button>
+                  </li>
+                ))}
+              </>
+            )}
           </ul>
           {notice && <p className="border-t border-navy-700 p-3 text-center text-xs text-silver-500">{notice}</p>}
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
-          {chat ? (
+          {active === OFFICIAL ? (
+            <>
+              <header className="flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
+                <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
+                <Logo size={36} />
+                <span className="flex-1 truncate font-medium">{brand.name}</span>
+                <span className="rounded-full bg-gold-400/20 px-2 text-[11px] text-gold-200">Official</span>
+              </header>
+              <div className="flex-1 space-y-2 overflow-y-auto p-4">
+                {official.map((i) => (
+                  <div key={i.id} className="flex flex-col items-start">
+                    <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-silver-100 px-4 py-2 text-navy-950">
+                      <p className="whitespace-pre-wrap break-words">{i.body}</p>
+                      <p className="mt-1 text-right text-[10px] opacity-70">{fmtDate(i.created_at)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="border-t border-navy-700 bg-navy-900 p-3 text-center text-xs text-silver-500">
+                Official updates from {brand.name}. You cannot reply here.
+              </p>
+            </>
+          ) : chat ? (
             <>
               <header className="relative flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
