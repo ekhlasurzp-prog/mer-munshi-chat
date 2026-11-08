@@ -7,7 +7,7 @@ export default function Logo({ size = 48, glow = false }: { size?: number; glow?
   const brand = useBrand()
   const [bad, setBad] = useState(false)
   useEffect(() => { setBad(false) }, [brand.logo])
-  const src = brand.logo && !bad ? brand.logo : '/logo.png'
+  const src = brand.logoData || (brand.logo && !bad ? brand.logo : '/logo.png')
   return (
     <img
       src={src}
