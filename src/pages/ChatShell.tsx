@@ -111,6 +111,8 @@ export default function ChatShell() {
   const [welcome, setWelcome] = useState('')
   const [seenAt, setSeenAt] = useState(readSeen)
   const [tab, setTab] = useState<'chats' | 'contacts'>('chats')
+  const [topMenu, setTopMenu] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
@@ -166,7 +168,7 @@ export default function ChatShell() {
         }
       })
 
-      const [m, n, b, rx, ret, an, pf, wl, ct] = await Promise.all([
+      const [m, n, b, rx, ret, an, pf, wl, ct, ad] = await Promise.all([
         sb.from('messages').select(COLS).order('created_at', { ascending: false }).limit(500),
         sb.from('nicknames').select('target_id, nickname').eq('owner_id', uid),
         sb.from('blocks').select('blocked_id').eq('blocker_id', uid),
@@ -176,6 +178,7 @@ export default function ChatShell() {
         sb.from('profiles').select('created_at').eq('id', uid).maybeSingle(),
         sb.rpc('get_welcome'),
         sb.from('contacts').select('contact_id').eq('owner_id', uid),
+        sb.rpc('am_i_admin'),
       ])
       if (m.error) { setOnline(false); return }
       const msgList = ((m.data ?? []) as Msg[]).reverse()
@@ -201,6 +204,7 @@ export default function ChatShell() {
       setConvs(convList); setPeerRead(pr); setMsgs(msgList); setNicks(nk); setBlocked(bk)
       setReactions(rr); setAnns(annList); setContacts(contactList); setJoined(joinedAt); setWelcome(welcomeText)
       setRetention(typeof ret.data === 'number' ? ret.data : null)
+      setIsAdmin(ad.data === true)
       setOnline(true)
       writeCache({
         uid, convs: convList, msgs: msgList, nicks: nk, peerRead: pr, anns: annList,
@@ -521,6 +525,17 @@ export default function ChatShell() {
   const chat = convs.find((c) => c.id === active)
   const totalUnread = convs.reduce((n, c) => n + unread(c), 0)
   const chatPeers = new Set(convs.map((c) => c.peerId))
+  const lastByConv: Record<string, number> = {}
+  for (const m of msgs) {
+    const t = new Date(m.created_at).getTime()
+    if (t > (lastByConv[m.conversation_id] ?? 0)) lastByConv[m.conversation_id] = t
+  }
+  const entries: { kind: 'official' | 'chat'; time: number; conv: Conv | null }[] = [
+    ...(official.length
+      ? [{ kind: 'official' as const, time: new Date(official[official.length - 1].created_at).getTime(), conv: null }]
+      : []),
+    ...convs.map((c) => ({ kind: 'chat' as const, time: lastByConv[c.id] ?? 0, conv: c })),
+  ].sort((x, y) => y.time - x.time)
 
   // Opens OpenAI (ChatGPT) in the browser. This is our own button, not an official OpenAI one.
   function openAI() {
@@ -531,6 +546,23 @@ export default function ChatShell() {
       try { localStorage.setItem('mmc-ai-ok', '1') } catch { /* ignore */ }
     }
     window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
+  }
+
+  async function invite() {
+    setTopMenu(false)
+    const url = window.location.origin
+    try {
+      if (navigator.share) { await navigator.share({ title: brand.name, text: `Chat with me on ${brand.name}`, url }); return }
+      await navigator.clipboard.writeText(url)
+      window.alert('Link copied.')
+    } catch { /* cancelled */ }
+  }
+
+  async function signOutNow() {
+    setTopMenu(false)
+    await supabase?.auth.signOut()
+    clearCache()
+    window.location.hash = '/'
   }
 
   async function removeContact(id: string) {
@@ -558,10 +590,24 @@ export default function ChatShell() {
       )}
       <div className="flex min-h-0 flex-1">
         <aside className={`${active ? 'hidden' : 'relative flex'} w-full flex-col border-r border-navy-700 bg-navy-900 md:flex md:w-80`}>
-          <header className="flex items-center gap-3 border-b border-navy-700 p-3">
+          <header className="relative flex items-center gap-3 border-b border-navy-700 p-3">
             <Logo size={40} />
             <h1 className="min-w-0 flex-1 truncate font-display text-lg text-gold-200">{brand.name}</h1>
-            <a href="#/profile" className="rounded-full border border-gold-400/70 px-3 py-1 text-sm text-gold-200">Profile</a>
+            <button onClick={() => setTopMenu(!topMenu)} aria-label="More options"
+              className="px-2 text-2xl leading-none text-silver-100">&#8942;</button>
+            {topMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setTopMenu(false)} />
+                <div className="absolute right-3 top-14 z-20 w-52 rounded-xl border border-navy-700 bg-navy-800 p-1 text-sm shadow-lg">
+                  <a href="#/profile" className="block rounded-lg px-3 py-2 active:bg-navy-700">Profile</a>
+                  <button onClick={invite} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Invite friends</button>
+                  <a href="#/privacy" className="block rounded-lg px-3 py-2 active:bg-navy-700">Privacy policy</a>
+                  <a href="#/terms" className="block rounded-lg px-3 py-2 active:bg-navy-700">Terms of service</a>
+                  {isAdmin && <a href="#/admin" className="block rounded-lg px-3 py-2 active:bg-navy-700">Admin panel</a>}
+                  <button onClick={signOutNow} className="block w-full rounded-lg px-3 py-2 text-left text-red-300 active:bg-navy-700">Sign out</button>
+                </div>
+              </>
+            )}
           </header>
           {tab === 'chats' ? (
             <div className="border-b border-navy-700 p-3">
@@ -572,22 +618,6 @@ export default function ChatShell() {
             <p className="border-b border-navy-700 px-4 py-3 text-lg text-gold-200">Contacts</p>
           )}
           <ul className="flex-1 overflow-y-auto">
-            {tab === 'chats' && !q && official.length > 0 && (
-              <li>
-                <button onClick={() => { setActive(OFFICIAL); setMenu(false) }}
-                  className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                  <Logo size={44} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2 font-medium">
-                      <span className="truncate">{brand.name}</span>
-                      <span className="rounded-full bg-gold-400/20 px-2 text-[10px] text-gold-200">Official</span>
-                    </span>
-                    <span className="block truncate text-sm text-silver-300">{official[official.length - 1].body}</span>
-                  </span>
-                  {officialUnread > 0 && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs">{officialUnread}</span>}
-                </button>
-              </li>
-            )}
             {tab === 'chats' && q.trim().length >= 2 && found.length === 0 && (
               <li className="p-4 text-sm text-silver-500">No users found.</li>
             )}
@@ -600,10 +630,29 @@ export default function ChatShell() {
                 </button>
               </li>
             ))}
-            {tab === 'chats' && !q && convs.length === 0 && (
+            {tab === 'chats' && !q && entries.length === 0 && (
               <li className="p-4 text-sm text-silver-300">No chats yet. Search for a username above to start one.</li>
             )}
-            {tab === 'chats' && !q && convs.map((c) => {
+            {tab === 'chats' && !q && entries.map((e) => {
+              if (e.kind === 'official') {
+                return (
+                  <li key="official">
+                    <button onClick={() => { setActive(OFFICIAL); setMenu(false) }}
+                      className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
+                      <Logo size={44} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2 font-medium">
+                          <span className="truncate">{brand.name}</span>
+                          <span className="text-gold-400" aria-label="Official account">{'\u2605'}</span>
+                        </span>
+                        <span className="block truncate text-sm text-silver-300">{official[official.length - 1].body}</span>
+                      </span>
+                      {officialUnread > 0 && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs">{officialUnread}</span>}
+                    </button>
+                  </li>
+                )
+              }
+              const c = e.conv as Conv
               const n = unread(c)
               return (
                 <li key={c.id}>
@@ -681,8 +730,10 @@ export default function ChatShell() {
               <header className="flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
                 <Logo size={36} />
-                <span className="flex-1 truncate font-medium">{brand.name}</span>
-                <span className="rounded-full bg-gold-400/20 px-2 text-[11px] text-gold-200">Official</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2 font-medium">
+                  <span className="truncate">{brand.name}</span>
+                  <span className="text-gold-400" aria-label="Official account">{'\u2605'}</span>
+                </span>
               </header>
               <div className="flex-1 space-y-2 overflow-y-auto p-4">
                 {official.map((i) => (
@@ -695,7 +746,7 @@ export default function ChatShell() {
                 ))}
               </div>
               <p className="border-t border-navy-700 bg-navy-900 p-3 text-center text-xs text-silver-500">
-                Official updates from {brand.name}. You cannot reply here.
+                Updates from {brand.name}. You cannot reply here.
               </p>
             </>
           ) : chat ? (
