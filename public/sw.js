@@ -1,6 +1,6 @@
 /* MER Munshi Chat service worker: opens the app offline, and shows message notifications
    (no message text is sent through push). */
-const CACHE = 'mmc-shell-v1'
+const CACHE = 'mmc-shell-v2'
 
 self.addEventListener('install', (e) => {
   self.skipWaiting()
@@ -53,7 +53,7 @@ self.addEventListener('push', (event) => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     // The app is open and visible: it already updates live, so no notification is needed
     if (wins.some((w) => w.visibilityState === 'visible')) return
-    await self.registration.showNotification(d.title || 'MER Munshi Chat', {
+    await self.registration.showNotification(d.title || 'Songjog', {
       body: d.body || 'You have a new message',
       icon: d.icon || '/icons/icon-192.png',
       badge: '/icons/badge-96.png',

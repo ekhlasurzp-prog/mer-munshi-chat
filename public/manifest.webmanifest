@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "MER Munshi Chat",
-  "short_name": "Munshi Chat",
+  "name": "Songjog",
+  "short_name": "Songjog",
   "description": "Private messaging with usernames",
   "start_url": "/#/chat",
   "scope": "/",
