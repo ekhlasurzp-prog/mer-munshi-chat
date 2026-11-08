@@ -4,7 +4,7 @@ const SUPABASE_URL = 'https://jrzwxwcakhjlebtsfhno.supabase.co'
 const KEY = 'sb_publishable_Xex0Fd7YNqeZy_11SaOj6w_cmgymINs'
 
 export default async function handler(req, res) {
-  let name = 'MER Munshi Chat'
+  let name = 'Songjog'
   let logo = ''
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_branding`, {
