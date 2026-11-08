@@ -24,7 +24,7 @@ export default function App() {
     // Already signed in? Skip the landing and login pages and open the chat.
     if (supabase && ['/', '/login'].includes(route())) {
       supabase.auth.getSession().then(({ data }) => {
-        if (data.session) window.location.hash = '/chat'
+        if (data.session) window.location.replace('#/chat')
       })
     }
     return () => window.removeEventListener('hashchange', on)
