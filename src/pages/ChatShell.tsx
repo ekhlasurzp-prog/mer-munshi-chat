@@ -9,6 +9,7 @@ type Msg = {
   id: string; conversation_id: string; sender_id: string; body: string | null
   created_at: string; deleted_at: string | null
   attachment_path: string | null; attachment_name: string | null; attachment_type: string | null
+  status?: 'sending' | 'sent' | 'seen'
 }
 type Conv = { id: string; type: string; username: string; peerId: string | null; avatar: string | null; lastRead: string }
 type Found = { id: string; username: string; avatar_path: string | null }
@@ -18,12 +19,11 @@ type Contact = { id: string; username: string; avatar: string | null }
 const OFFICIAL = 'official'
 const readSeen = () => { try { return localStorage.getItem('mmc-official-seen') || '' } catch { return '' } }
 const fmtDate = (s: string) => new Date(s).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
-const OFFLINE_MSG = 'You are offline. You can read saved messages, but sending needs internet.'
 
 const COLS = 'id,conversation_id,sender_id,body,created_at,deleted_at,attachment_path,attachment_name,attachment_type'
 const EMOJIS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}']
 const HEART = EMOJIS[1]
-const MAX_IMAGE = 10 * 1024 * 1024 // 10 MB
+const MAX_IMAGE = 10 * 1024 * 1024
 const MAX_VOICE_SECONDS = 30
 const LONG_TEXT = 300
 const fmt = (s: string) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -50,7 +50,6 @@ const SparkIcon = () => (
   </svg>
 )
 
-// Long messages are shortened with a "See more" toggle
 function Body({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   if (text.length <= LONG_TEXT) return <p className="whitespace-pre-wrap break-words">{text}</p>
@@ -65,7 +64,6 @@ function Body({ text }: { text: string }) {
   )
 }
 
-// Private files are shown through short-lived signed links
 function Attach({ path, type }: { path: string; type: string | null }) {
   const [url, setUrl] = useState('')
   const [failed, setFailed] = useState(false)
@@ -113,6 +111,7 @@ export default function ChatShell() {
   const [tab, setTab] = useState<'chats' | 'contacts'>('chats')
   const [topMenu, setTopMenu] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [onlineUsers, setOnlineUsers] = useState<Record<string, boolean>>({})
   const searchRef = useRef<HTMLInputElement>(null)
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
@@ -130,7 +129,30 @@ export default function ChatShell() {
   activeRef.current = active
   meRef.current = me
 
-  // Phone Back button: opening a chat adds one history step, Back closes it
+  useEffect(() => {
+    if (!supabase || !me) return
+    const room = supabase.channel('online-users', {
+      config: { presence: { key: me } },
+    })
+
+    room
+      .on('presence', { event: 'sync' }, () => {
+        const state = room.presenceState()
+        const users: Record<string, boolean> = {}
+        Object.keys(state).forEach((key) => { users[key] = true })
+        setOnlineUsers(users)
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await room.track({ online_at: new Date().toISOString() })
+        }
+      })
+
+    return () => {
+      supabase.removeChannel(room)
+    }
+  }, [me])
+
   const pushed = useRef(false)
   function openPane(id: string) {
     if (!pushed.current) { window.history.pushState({ mmc: 1 }, ''); pushed.current = true }
@@ -146,7 +168,6 @@ export default function ChatShell() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
   useEffect(() => {
-    // The chat was closed another way (for example deleted): drop the extra history step
     if (active === null && pushed.current) { pushed.current = false; window.history.back() }
   }, [active])
 
@@ -156,7 +177,7 @@ export default function ChatShell() {
     try {
       const { data: mem, error: memErr } = await sb.from('conversation_members')
         .select('conversation_id, last_read_at, conversations(id,type,title)').eq('user_id', uid)
-      if (memErr || !mem) { setOnline(false); return } // no connection: keep the saved copy
+      if (memErr || !mem) { setOnline(false); return }
       const rows = mem as any[]
       const ids = rows.map((r) => r.conversation_id)
       const peer: Record<string, { id: string; username: string; avatar: string | null; read: string }> = {}
@@ -235,7 +256,6 @@ export default function ChatShell() {
     }
   }, [])
 
-  // Start-up: show saved messages at once, check sign-in, load fresh data, listen for changes
   useEffect(() => {
     if (!supabase) { window.location.replace('#/login'); return }
     const sb = supabase
@@ -298,7 +318,6 @@ export default function ChatShell() {
     return () => { cancelled = true; if (channel) sb.removeChannel(channel) }
   }, [loadAll])
 
-  // Username search (min 2 characters)
   useEffect(() => {
     const clean = q.toLowerCase().replace(/[^a-z0-9_]/g, '')
     if (!supabase || !me || clean.length < 2) { setFound([]); return }
@@ -312,7 +331,6 @@ export default function ChatShell() {
 
   const thread = msgs.filter((m) => m.conversation_id === active)
 
-  // The official chat from the app: welcome message + admin announcements (read only)
   const official = [
     ...(welcome ? [{ id: 'welcome', body: welcome, created_at: joined || '1970-01-01T00:00:00Z' }] : []),
     ...anns.filter((a) => !joined || new Date(a.created_at) >= new Date(joined)),
@@ -322,10 +340,9 @@ export default function ChatShell() {
     if (active !== OFFICIAL || !official.length) return
     const last = official[official.length - 1].created_at
     setSeenAt(last)
-    try { localStorage.setItem('mmc-official-seen', last) } catch { /* ignore */ }
+    try { localStorage.setItem('mmc-official-seen', last) } catch {}
   }, [active, official.length])
 
-  // Refresh when the app comes back to the screen
   useEffect(() => {
     if (!me) return
     const on = () => { if (document.visibilityState === 'visible') loadAll(me) }
@@ -341,12 +358,10 @@ export default function ChatShell() {
     }
   }, [me, loadAll])
 
-  // If the open chat no longer exists, go back to the list
   useEffect(() => {
     if (active && active !== OFFICIAL && !convs.some((c) => c.id === active)) setActive(null)
   }, [convs, active])
 
-  // Mark the open chat as read (newest message's server time) and scroll down
   useEffect(() => {
     if (!active || !me || !supabase) return
     bottom.current?.scrollIntoView({ block: 'end' })
@@ -372,9 +387,33 @@ export default function ChatShell() {
 
   async function addMessage(row: Record<string, unknown>) {
     if (!supabase) return false
-    if (!navigator.onLine) { setErr(OFFLINE_MSG); return false }
+    
+    const tempId = `temp-${Date.now()}`
+    const localMsg: Msg = {
+      id: tempId,
+      conversation_id: String(row.conversation_id),
+      sender_id: String(row.sender_id),
+      body: (row.body as string) || null,
+      created_at: new Date().toISOString(),
+      deleted_at: null,
+      attachment_path: (row.attachment_path as string) || null,
+      attachment_name: (row.attachment_name as string) || null,
+      attachment_type: (row.attachment_type as string) || null,
+      status: 'sending',
+    }
+
+    if (!navigator.onLine) {
+      setMsgs((p) => [...p, localMsg])
+      return true
+    }
+
     const { data, error } = await supabase.from('messages').insert(row).select(COLS).single()
-    if (error) { setErr(nice(error.message)); return false }
+    if (error) {
+      if (!/offline|network/i.test(error.message)) {
+        setErr(nice(error.message))
+      }
+      return false
+    }
     const m = data as Msg
     setMsgs((p) => (p.some((x) => x.id === m.id) ? p : [...p, m]))
     return true
@@ -389,11 +428,13 @@ export default function ChatShell() {
     if (!ok) setText(body)
   }
 
-  // Upload a photo or voice note to private storage, then send it as a message
   async function upload(file: Blob, name: string, type: string) {
     const cid = activeRef.current, uid = meRef.current
     if (!supabase || !cid || !uid) return
-    if (!navigator.onLine) { setErr(OFFLINE_MSG); return }
+    if (!navigator.onLine) {
+      addMessage({ conversation_id: cid, sender_id: uid, attachment_path: null, attachment_name: name, attachment_type: type })
+      return
+    }
     setErr('')
     const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) : 'bin'
     const path = `${cid}/${crypto.randomUUID()}.${ext}`
@@ -457,7 +498,6 @@ export default function ChatShell() {
     if (m.attachment_path) await supabase.storage.from('attachments').remove([m.attachment_path])
   }
 
-  // Tap an emoji again to remove your reaction. Double-tap a message for a quick heart.
   async function react(m: Msg, emoji: string) {
     if (!supabase || !me || m.deleted_at) return
     const next = reactions[m.id]?.[me] === emoji ? '' : emoji
@@ -514,7 +554,6 @@ export default function ChatShell() {
     if (!error) window.alert('Report sent. Thank you.')
   }
 
-  // Delete a whole chat for everyone in it (files first, then the chat itself)
   async function deleteChat() {
     setMenu(false)
     const cid = activeRef.current
@@ -557,7 +596,6 @@ export default function ChatShell() {
     ...convs.map((c) => ({ kind: 'chat' as const, time: lastByConv[c.id] ?? 0, conv: c })),
   ].sort((x, y) => y.time - x.time)
 
-  // Opens OpenAI (ChatGPT) in the browser. This is our own button, not an official OpenAI one.
   function openAI() {
     window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
   }
@@ -569,7 +607,7 @@ export default function ChatShell() {
       if (navigator.share) { await navigator.share({ title: brand.name, text: `Chat with me on ${brand.name}`, url }); return }
       await navigator.clipboard.writeText(url)
       window.alert('Link copied.')
-    } catch { /* cancelled */ }
+    } catch {}
   }
 
   async function signOutNow() {
@@ -660,7 +698,12 @@ export default function ChatShell() {
               <li key={u.id}>
                 <button onClick={() => startChat(u.id)}
                   className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                  <Avatar path={u.avatar_path} name={u.username} />
+                  <div className="relative inline-block">
+                    <Avatar path={u.avatar_path} name={u.username} />
+                    {onlineUsers[u.id] && (
+                      <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-navy-900" title="Online" />
+                    )}
+                  </div>
                   <span className="flex-1">@{u.username}<span className="block text-xs text-silver-500">Start chat</span></span>
                 </button>
               </li>
@@ -678,7 +721,7 @@ export default function ChatShell() {
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2 font-medium">
                           <span className="truncate">{brand.name}</span>
-                          <span className="text-gold-400" aria-label="Official account">{'\u2605'}</span>
+                          <span className="text-gold-400" aria-label="Official account font-bold text-lg">*</span>
                         </span>
                         <span className="block truncate text-sm text-silver-300">{official[official.length - 1].body}</span>
                       </span>
@@ -693,7 +736,12 @@ export default function ChatShell() {
                 <li key={c.id}>
                   <button onClick={() => openPane(c.id)}
                     className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                    <Avatar path={c.avatar} name={nameOf(c)} />
+                    <div className="relative inline-block">
+                      <Avatar path={c.avatar} name={nameOf(c)} />
+                      {c.peerId && onlineUsers[c.peerId] && (
+                        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-navy-900" title="Online" />
+                      )}
+                    </div>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{nameOf(c)}</span>
                       <span className="block truncate text-sm text-silver-300">{lastOf(c.id)}</span>
@@ -712,7 +760,12 @@ export default function ChatShell() {
               <li key={c.id} className="flex items-center border-b border-navy-800">
                 <button onClick={() => startChat(c.id)}
                   className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-navy-800">
-                  <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
+                  <div className="relative inline-block">
+                    <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
+                    {onlineUsers[c.id] && (
+                      <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-navy-900" title="Online" />
+                    )}
+                  </div>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{nicks[c.id] || c.username}</span>
                     <span className="block text-xs text-silver-500">{chatPeers.has(c.id) ? 'Open chat' : 'Tap to chat'}</span>
@@ -748,7 +801,7 @@ export default function ChatShell() {
                 <Logo size={36} />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-medium">
                   <span className="truncate">{brand.name}</span>
-                  <span className="text-gold-400" aria-label="Official account">{'\u2605'}</span>
+                  <span className="text-gold-400" aria-label="Official account">*</span>
                 </span>
               </header>
               <div className="flex-1 space-y-2 overflow-y-auto p-4">
@@ -770,7 +823,12 @@ export default function ChatShell() {
             <>
               <header className="relative flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={closePane} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
-                <Avatar path={chat.avatar} name={nameOf(chat)} size={36} />
+                <div className="relative inline-block">
+                  <Avatar path={chat.avatar} name={nameOf(chat)} size={36} />
+                  {chat.peerId && onlineUsers[chat.peerId] && (
+                    <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-navy-900" title="Online" />
+                  )}
+                </div>
                 <span className="flex-1 truncate font-medium">{nameOf(chat)}</span>
                 <button onClick={() => setMenu(!menu)} aria-label="Chat options" className="px-2 text-2xl leading-none text-silver-300">&#8942;</button>
                 {menu && (
@@ -788,9 +846,22 @@ export default function ChatShell() {
                   const mine = m.sender_id === me
                   const pr = peerRead[m.conversation_id]
                   const seen = Boolean(pr) && new Date(pr) >= new Date(m.created_at)
+                  
+                  let dotColor = 'bg-yellow-400'
+                  let statusTitle = 'Sent'
+
+                  if (m.status === 'sending' || (!navigator.onLine && mine)) {
+                    dotColor = 'bg-red-500'
+                    statusTitle = 'Sending (Offline)'
+                  } else if (seen) {
+                    dotColor = 'bg-emerald-500'
+                    statusTitle = 'Seen'
+                  }
+
                   const counts: Record<string, number> = {}
                   Object.values(reactions[m.id] ?? {}).forEach((e) => { if (e) counts[e] = (counts[e] ?? 0) + 1 })
                   const myReact = me ? reactions[m.id]?.[me] : ''
+
                   return (
                     <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
                       <div onClick={() => !m.deleted_at && setSel(sel === m.id ? null : m.id)}
@@ -804,11 +875,11 @@ export default function ChatShell() {
                             {m.body ? <Body text={m.body} /> : null}
                           </>
                         )}
-                        <p className="mt-1 flex items-center justify-end gap-1 text-[10px] opacity-80">
+                        <p className="mt-1 flex items-center justify-end gap-1.5 text-[10px] opacity-80">
                           {fmt(m.created_at)}
                           {mine && !m.deleted_at && (
-                            <span className={seen ? 'font-bold text-gold-200' : ''} title={seen ? 'Seen' : 'Sent'}>
-                              {seen ? '\u2713\u2713' : '\u2713'}
+                            <span className="flex items-center gap-1" title={statusTitle}>
+                              <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
                             </span>
                           )}
                         </p>

@@ -3,7 +3,6 @@ import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
 import { clearCache } from '../lib/offline'
 
-// Shrink a photo to at most 256 px before upload (small and fast on mobile data)
 async function shrink(file: File, max = 256): Promise<Blob> {
   const bmp = await createImageBitmap(file)
   const s = Math.min(1, max / Math.max(bmp.width, bmp.height))
