@@ -25,7 +25,7 @@ export default function Auth({ mode }: { mode: 'login' | 'signup' }) {
       : await supabase.auth.signInWithPassword({ email, password })
     setBusy(false)
     if (error) setMsg(error.message)
-    else window.location.hash = signup ? '/onboarding' : '/chat'
+    else window.location.replace(signup ? '#/onboarding' : '#/chat')
   }
 
   return (

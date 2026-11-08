@@ -130,6 +130,26 @@ export default function ChatShell() {
   activeRef.current = active
   meRef.current = me
 
+  // Phone Back button: opening a chat adds one history step, Back closes it
+  const pushed = useRef(false)
+  function openPane(id: string) {
+    if (!pushed.current) { window.history.pushState({ mmc: 1 }, ''); pushed.current = true }
+    setActive(id)
+  }
+  function closePane() {
+    if (pushed.current) window.history.back()
+    else setActive(null)
+  }
+  useEffect(() => {
+    const onPop = () => { pushed.current = false; setActive(null); setMenu(false); setSel(null) }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => {
+    // The chat was closed another way (for example deleted): drop the extra history step
+    if (active === null && pushed.current) { pushed.current = false; window.history.back() }
+  }, [active])
+
   const loadAll = useCallback(async (uid: string) => {
     const sb = supabase
     if (!sb) return
@@ -217,7 +237,7 @@ export default function ChatShell() {
 
   // Start-up: show saved messages at once, check sign-in, load fresh data, listen for changes
   useEffect(() => {
-    if (!supabase) { window.location.hash = '/login'; return }
+    if (!supabase) { window.location.replace('#/login'); return }
     const sb = supabase
     let cancelled = false
     let channel: ReturnType<typeof sb.channel> | null = null
@@ -233,7 +253,7 @@ export default function ChatShell() {
       if (!uid) {
         const offlineNow = !navigator.onLine || (error && /fetch|network/i.test(error.message))
         if (offlineNow && cached) { uid = cached.uid; setOnline(false) } else {
-          clearCache(); window.location.hash = '/login'; return
+          clearCache(); window.location.replace('#/login'); return
         }
       }
       if (cached && cached.uid !== uid) {
@@ -242,7 +262,7 @@ export default function ChatShell() {
       }
       if (navigator.onLine) {
         const { data: p } = await sb.from('profiles').select('username').eq('id', uid).maybeSingle()
-        if (!p) { window.location.hash = '/onboarding'; return }
+        if (!p) { window.location.replace('#/onboarding'); return }
       }
       if (cancelled) return
       setMe(uid)
@@ -347,7 +367,7 @@ export default function ChatShell() {
     if (error) { setErr(nice(error.message)); return }
     await loadAll(me)
     setQ(''); setFound([]); setTab('chats')
-    setActive(data as string)
+    openPane(data as string)
   }
 
   async function addMessage(row: Record<string, unknown>) {
@@ -539,30 +559,7 @@ export default function ChatShell() {
 
   // Opens OpenAI (ChatGPT) in the browser. This is our own button, not an official OpenAI one.
   function openAI() {
-    let ok = false
-    try { ok = localStorage.getItem('mmc-ai-ok') === '1' } catch { /* ignore */ }
-    if (!ok) {
-      if (!window.confirm(`This opens OpenAI (ChatGPT) in your browser. What you write there is handled by OpenAI, not by ${brand.name}. Continue?`)) return
-      try { localStorage.setItem('mmc-ai-ok', '1') } catch { /* ignore */ }
-    }
     window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
-  }
-
-  async function invite() {
-    setTopMenu(false)
-    const url = window.location.origin
-    try {
-      if (navigator.share) { await navigator.share({ title: brand.name, text: `Chat with me on ${brand.name}`, url }); return }
-      await navigator.clipboard.writeText(url)
-      window.alert('Link copied.')
-    } catch { /* cancelled */ }
-  }
-
-  async function signOutNow() {
-    setTopMenu(false)
-    await supabase?.auth.signOut()
-    clearCache()
-    window.location.hash = '/'
   }
 
   async function removeContact(id: string) {
@@ -574,6 +571,32 @@ export default function ChatShell() {
 
   const notice = retention ? `Messages older than ${retention} days are deleted automatically.` : ''
 
+  const renderNav = (current: 'chats' | 'contacts' | 'updates') => {
+    const goTab = (t: 'chats' | 'contacts') => { setTab(t); if (activeRef.current) closePane() }
+    return (
+      <nav className="flex border-t border-navy-700 bg-navy-900 px-1 pb-1 pt-2">
+        {[
+          { key: 'chats', label: 'Chats', icon: <ChatIcon />, badge: totalUnread, active: current === 'chats', on: () => goTab('chats') },
+          { key: 'contacts', label: 'Contacts', icon: <PeopleIcon />, badge: 0, active: current === 'contacts', on: () => goTab('contacts') },
+          { key: 'updates', label: 'Updates', icon: <BellIcon />, badge: officialUnread, active: current === 'updates', on: () => { if (activeRef.current !== OFFICIAL) openPane(OFFICIAL) } },
+          { key: 'me', label: 'Profile', icon: <UserIcon />, badge: 0, active: false, on: () => { window.location.hash = '/profile' } },
+        ].map((t) => (
+          <button key={t.key} onClick={t.on} className="flex flex-1 flex-col items-center gap-1 text-xs">
+            <span className={`relative grid h-8 w-14 place-items-center rounded-full ${t.active ? 'bg-navy-700 text-gold-200' : 'text-silver-300'}`}>
+              {t.icon}
+              {t.badge > 0 && (
+                <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-emerald-500 px-1 text-center text-[10px] font-bold text-white">
+                  {t.badge > 99 ? '99+' : t.badge}
+                </span>
+              )}
+            </span>
+            <span className={t.active ? 'font-semibold text-silver-100' : 'text-silver-300'}>{t.label}</span>
+          </button>
+        ))}
+      </nav>
+    )
+  }
+
   if (!me) return <div className="grid h-full place-items-center text-silver-300">Loading...</div>
 
   return (
@@ -581,11 +604,6 @@ export default function ChatShell() {
       {err && (
         <p role="alert" onClick={() => setErr('')} className="bg-red-900/40 px-4 py-2 text-center text-sm text-red-200">
           {err} (tap to close)
-        </p>
-      )}
-      {!online && (
-        <p className="bg-gold-400/15 px-4 py-1 text-center text-xs text-gold-200">
-          Offline: showing saved messages. Photos, voice notes and sending need internet.
         </p>
       )}
       <div className="flex min-h-0 flex-1">
@@ -637,7 +655,7 @@ export default function ChatShell() {
               if (e.kind === 'official') {
                 return (
                   <li key="official">
-                    <button onClick={() => { setActive(OFFICIAL); setMenu(false) }}
+                    <button onClick={() => openPane(OFFICIAL)}
                       className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
                       <Logo size={44} />
                       <span className="min-w-0 flex-1">
@@ -656,7 +674,7 @@ export default function ChatShell() {
               const n = unread(c)
               return (
                 <li key={c.id}>
-                  <button onClick={() => { setActive(c.id); setMenu(false); setSel(null) }}
+                  <button onClick={() => openPane(c.id)}
                     className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
                     <Avatar path={c.avatar} name={nameOf(c)} />
                     <span className="min-w-0 flex-1">
@@ -702,33 +720,14 @@ export default function ChatShell() {
             </button>
           </div>
 
-          <nav className="flex border-t border-navy-700 bg-navy-900 px-1 pb-1 pt-2">
-            {[
-              { key: 'chats', label: 'Chats', icon: <ChatIcon />, badge: totalUnread, active: tab === 'chats', on: () => setTab('chats') },
-              { key: 'contacts', label: 'Contacts', icon: <PeopleIcon />, badge: 0, active: tab === 'contacts', on: () => setTab('contacts') },
-              { key: 'updates', label: 'Updates', icon: <BellIcon />, badge: officialUnread, active: false, on: () => { setActive(OFFICIAL); setMenu(false) } },
-              { key: 'me', label: 'Profile', icon: <UserIcon />, badge: 0, active: false, on: () => { window.location.hash = '/profile' } },
-            ].map((t) => (
-              <button key={t.key} onClick={t.on} className="flex flex-1 flex-col items-center gap-1 text-xs">
-                <span className={`relative grid h-8 w-14 place-items-center rounded-full ${t.active ? 'bg-navy-700 text-gold-200' : 'text-silver-300'}`}>
-                  {t.icon}
-                  {t.badge > 0 && (
-                    <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-emerald-500 px-1 text-center text-[10px] font-bold text-white">
-                      {t.badge > 99 ? '99+' : t.badge}
-                    </span>
-                  )}
-                </span>
-                <span className={t.active ? 'font-semibold text-silver-100' : 'text-silver-300'}>{t.label}</span>
-              </button>
-            ))}
-          </nav>
+          {renderNav(tab)}
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
           {active === OFFICIAL ? (
             <>
               <header className="flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
-                <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
+                <button onClick={closePane} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
                 <Logo size={36} />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-medium">
                   <span className="truncate">{brand.name}</span>
@@ -748,11 +747,12 @@ export default function ChatShell() {
               <p className="border-t border-navy-700 bg-navy-900 p-3 text-center text-xs text-silver-500">
                 Updates from {brand.name}. You cannot reply here.
               </p>
+              <div className="md:hidden">{renderNav('updates')}</div>
             </>
           ) : chat ? (
             <>
               <header className="relative flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
-                <button onClick={() => setActive(null)} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
+                <button onClick={closePane} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
                 <Avatar path={chat.avatar} name={nameOf(chat)} size={36} />
                 <span className="flex-1 truncate font-medium">{nameOf(chat)}</span>
                 <button onClick={() => setMenu(!menu)} aria-label="Chat options" className="px-2 text-2xl leading-none text-silver-300">&#8942;</button>
