@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { supabase } from './supabase'
 
 // App name and logo set by the admin. Saved on the device so they also show offline.
-export type Brand = { name: string; logo: string }
+export type Brand = { name: string; logo: string; logoData: string }
 const KEY = 'mmc-brand'
-const DEFAULT: Brand = { name: 'MER Munshi Chat', logo: '' }
+const DEFAULT: Brand = { name: 'Songjog', logo: '', logoData: '' }
 
 let current: Brand = (() => {
   try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(KEY) || '{}') } } catch { return DEFAULT }
@@ -20,6 +20,18 @@ function apply(b: Brand) {
 }
 apply(current)
 
+function toDataUrl(url: string): Promise<string> {
+  return fetch(url).then((r) => {
+    if (!r.ok) throw new Error('logo')
+    return r.blob()
+  }).then((b) => new Promise<string>((res, rej) => {
+    const fr = new FileReader()
+    fr.onload = () => res(String(fr.result))
+    fr.onerror = () => rej(new Error('read'))
+    fr.readAsDataURL(b)
+  }))
+}
+
 export async function refreshBrand() {
   if (!supabase) return
   try {
@@ -27,7 +39,12 @@ export async function refreshBrand() {
     if (!data) return
     const d = data as { name?: string; logo_path?: string }
     const logo = d.logo_path ? supabase.storage.from('branding').getPublicUrl(d.logo_path).data.publicUrl : ''
-    current = { name: d.name || DEFAULT.name, logo }
+    let logoData = ''
+    if (logo) {
+      logoData = current.logo === logo ? current.logoData : ''
+      if (!logoData) { try { logoData = await toDataUrl(logo) } catch { /* keep going without a saved copy */ } }
+    }
+    current = { name: d.name || DEFAULT.name, logo, logoData }
     try { localStorage.setItem(KEY, JSON.stringify(current)) } catch { /* ignore */ }
     apply(current)
     listeners.forEach((l) => l(current))
