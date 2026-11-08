@@ -2,7 +2,9 @@ import { ChangeEvent, useEffect, useState } from 'react'
 import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
 import { clearCache } from '../lib/offline'
+import { outboxClear, outboxCount } from '../lib/outbox'
 
+// Shrink a photo to at most 256 px before upload (small and fast on mobile data)
 async function shrink(file: File, max = 256): Promise<Blob> {
   const bmp = await createImageBitmap(file)
   const s = Math.min(1, max / Math.max(bmp.width, bmp.height))
@@ -68,8 +70,10 @@ export default function Profile() {
   }
 
   async function signOut() {
+    if ((await outboxCount()) > 0 && !window.confirm('You have unsent messages. If you sign out, they will be deleted. Sign out anyway?')) return
     await supabase?.auth.signOut()
     clearCache()
+    await outboxClear()
     window.location.hash = '/'
   }
 
@@ -83,6 +87,7 @@ export default function Profile() {
     if (error) { setBusy(false); setMsg(error.message); return }
     await supabase.auth.signOut()
     clearCache()
+    await outboxClear()
     window.location.hash = '/'
   }
 
