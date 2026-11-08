@@ -1,5 +1,3 @@
-// Vercel function: builds the app's install file (name + home-screen icon) from the admin's settings.
-// Only public data is used: the same public address and publishable key the website already uses.
 const SUPABASE_URL = 'https://jrzwxwcakhjlebtsfhno.supabase.co'
 const KEY = 'sb_publishable_Xex0Fd7YNqeZy_11SaOj6w_cmgymINs'
 
@@ -17,9 +15,7 @@ export default async function handler(req, res) {
       if (d && d.name) name = String(d.name)
       if (d && d.logo_path) logo = `${SUPABASE_URL}/storage/v1/object/public/branding/${d.logo_path}`
     }
-  } catch (e) {
-    // keep the defaults
-  }
+  } catch (e) {}
 
   const icons = logo
     ? [
