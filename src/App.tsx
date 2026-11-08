@@ -10,9 +10,8 @@ import NotifyBar from './components/NotifyBar'
 import Splash from './components/Splash'
 import { supabase } from './lib/supabase'
 
-// Simple hash routing keeps the project dependency-free for now.
 const route = () => window.location.hash.replace(/^#/, '') || '/'
-let splashShown = false // the intro plays once each time the app is opened
+let splashShown = false
 
 export default function App() {
   const [path, setPath] = useState(route())
@@ -21,7 +20,6 @@ export default function App() {
     const on = () => setPath(route())
     window.addEventListener('hashchange', on)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
-    // Already signed in? Skip the landing and login pages and open the chat.
     if (supabase && ['/', '/login'].includes(route())) {
       supabase.auth.getSession().then(({ data }) => {
         if (data.session) window.location.replace('#/chat')
