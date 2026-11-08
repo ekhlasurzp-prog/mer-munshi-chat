@@ -562,6 +562,23 @@ export default function ChatShell() {
     window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
   }
 
+  async function invite() {
+    setTopMenu(false)
+    const url = window.location.origin
+    try {
+      if (navigator.share) { await navigator.share({ title: brand.name, text: `Chat with me on ${brand.name}`, url }); return }
+      await navigator.clipboard.writeText(url)
+      window.alert('Link copied.')
+    } catch { /* cancelled */ }
+  }
+
+  async function signOutNow() {
+    setTopMenu(false)
+    await supabase?.auth.signOut()
+    clearCache()
+    window.location.replace('#/')
+  }
+
   async function removeContact(id: string) {
     if (!supabase || !me) return
     if (!window.confirm('Remove this person from your contacts?')) return
