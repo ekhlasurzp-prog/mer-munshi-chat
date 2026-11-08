@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-// Profile picture (public "avatars" bucket) or the first letter of the name
 export default function Avatar({ path, name, size = 44 }: { path?: string | null; name: string; size?: number }) {
   const [bad, setBad] = useState(false)
   const url = path && supabase ? supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl : ''

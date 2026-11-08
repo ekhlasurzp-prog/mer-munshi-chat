@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-// PUBLIC push key (safe to be in the browser). The private key lives only in Supabase secrets.
 const VAPID_PUBLIC = 'BBgucf_oAndh7Mue0c6m_fH-tCIXQWIbfHW7VH30WIbJl3f6wo-slDhWvmjWIT0NGQN-j6koV1HU8MxpeeqJfhI'
 
 const toKey = (b64: string) => {
@@ -35,7 +34,6 @@ export default function NotifyBar() {
     supabase.auth.getSession().then(({ data }) => { if (data.session) subscribe().catch(() => {}) })
   }, [perm])
 
-  // When the app is opened, clear old notifications so the icon count resets
   useEffect(() => {
     if (!supported()) return
     const clear = async () => {

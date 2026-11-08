@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useBrand } from '../lib/brand'
 
-// The logo is shown as a circle and is never stretched.
-// The admin can replace it; if it cannot load (for example offline) the built-in logo is used.
 export default function Logo({ size = 48, glow = false }: { size?: number; glow?: boolean }) {
   const brand = useBrand()
   const [bad, setBad] = useState(false)
