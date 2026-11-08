@@ -1,3 +1,5 @@
+// Vercel function: builds the app's install file (name + home-screen icon) from the admin's settings.
+// Only public data is used: the same public address and publishable key the website already uses.
 const SUPABASE_URL = 'https://jrzwxwcakhjlebtsfhno.supabase.co'
 const KEY = 'sb_publishable_Xex0Fd7YNqeZy_11SaOj6w_cmgymINs'
 
@@ -39,12 +41,12 @@ export default async function handler(req, res) {
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',
-    background_color: '#050B1E',
-    theme_color: '#050B1E',
+    background_color: '#fdfdfd',
+    theme_color: '#fdfdfd',
     icons,
   }
 
   res.setHeader('Content-Type', 'application/manifest+json')
   res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600')
   res.status(200).send(JSON.stringify(manifest))
-      }
+}
