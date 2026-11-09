@@ -9,9 +9,11 @@ import Legal from './pages/Legal'
 import NotifyBar from './components/NotifyBar'
 import Splash from './components/Splash'
 import { supabase } from './lib/supabase'
+import { startPresence, stopPresence } from './lib/presence'
 
+// Simple hash routing keeps the project dependency-free for now.
 const route = () => window.location.hash.replace(/^#/, '') || '/'
-let splashShown = false
+let splashShown = false // the intro plays once each time the app is opened
 
 export default function App() {
   const [path, setPath] = useState(route())
@@ -20,12 +22,24 @@ export default function App() {
     const on = () => setPath(route())
     window.addEventListener('hashchange', on)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+    // Already signed in? Skip the landing and login pages and open the chat.
     if (supabase && ['/', '/login'].includes(route())) {
       supabase.auth.getSession().then(({ data }) => {
         if (data.session) window.location.replace('#/chat')
       })
     }
     return () => window.removeEventListener('hashchange', on)
+  }, [])
+
+  // Online status runs on every page while someone is signed in
+  useEffect(() => {
+    const sb = supabase
+    if (!sb) return
+    sb.auth.getSession().then(({ data }) => { if (data.session) startPresence(data.session.user.id) })
+    const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
+      window.setTimeout(() => { if (session) startPresence(session.user.id); else stopPresence() }, 0)
+    })
+    return () => sub.subscription.unsubscribe()
   }, [])
 
   let view
