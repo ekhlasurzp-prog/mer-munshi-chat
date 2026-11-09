@@ -35,5 +35,6 @@ export function clearCache() {
   try {
     localStorage.removeItem(KEY)
     localStorage.removeItem('mmc-dismissed')
+    Object.keys(localStorage).filter((k) => k.startsWith('mmc-ai-')).forEach((k) => localStorage.removeItem(k))
   } catch { /* ignore */ }
 }

@@ -24,6 +24,7 @@ let tracking = false
 let timer: number | undefined
 let removeListeners: (() => void) | null = null
 const asked = new Map<string, number>() // when we last asked for someone's last seen
+const waiting = new Set<string>() // asked for before presence had started: sent as soon as it starts
 
 const visible = () => document.visibilityState === 'visible'
 
@@ -43,7 +44,8 @@ async function syncTracking() {
 
 export async function requestLastSeen(ids: string[]) {
   const sb = supabase
-  if (!sb || !uidNow || !ids.length) return
+  if (!sb || !ids.length) return
+  if (!uidNow) { ids.forEach((i) => waiting.add(i)); return }
   const now = Date.now()
   const fresh = ids.filter((id) => now - (asked.get(id) ?? 0) > 20000)
   if (!fresh.length) return
@@ -91,6 +93,7 @@ export async function startPresence(uid: string) {
   window.addEventListener('pagehide', touch)
   window.addEventListener('online', onNet)
   touch()
+  if (waiting.size) { const early = Array.from(waiting); waiting.clear(); requestLastSeen(early) }
   timer = window.setInterval(() => { if (visible()) touch() }, 300000) // every 5 minutes while open
   removeListeners = () => {
     document.removeEventListener('visibilitychange', onVis)
