@@ -24,6 +24,8 @@ export default function Legal({ kind }: { kind: 'privacy' | 'terms' }) {
           </ul>
           <h2 className="text-lg text-gold-200">Automatic deletion</h2>
           <p>The administrator may turn on automatic deletion of old messages (after 3 days, 10 days or 1 month). When it is on, a notice appears in the app. Deleted messages and their files cannot be recovered.</p>
+          <h2 className="text-lg text-gold-200">AI assistant (Gemini)</h2>
+          <p>If you chat with the AI assistant, the questions you type are sent through our server to Google Gemini to get an answer. On Google's free service, Google may use this content to improve its products, so do not share passwords or private details. The conversation is saved only on your own device and is removed when you sign out. It is not saved in our database.</p>
           <h2 className="text-lg text-gold-200">Your choices</h2>
           <p>You can delete a message for everyone, delete a whole chat, block or report a person, and delete your account from your Profile page. Deleting your account removes your profile and your messages.</p>
           <p>No messaging service can promise complete anonymity. Do not share information you cannot afford to lose.</p>

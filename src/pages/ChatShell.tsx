@@ -3,6 +3,8 @@ import Logo from '../components/Logo'
 import Avatar from '../components/Avatar'
 import StatusDot from '../components/StatusDot'
 import { requestLastSeen, usePresence } from '../lib/presence'
+import { useAiChat } from '../lib/ai'
+import GeminiPane from '../components/GeminiPane'
 import { outboxAll, outboxClear, outboxDelete, outboxPut } from '../lib/outbox'
 import type { OutItem } from '../lib/outbox'
 import { supabase } from '../lib/supabase'
@@ -21,6 +23,7 @@ type Reacts = Record<string, Record<string, string>>
 type Ann = { id: string; body: string; created_at: string }
 type Contact = { id: string; username: string; avatar: string | null }
 const OFFICIAL = 'official'
+const GEMINI = 'gemini'
 const readSeen = () => { try { return localStorage.getItem('mmc-official-seen') || '' } catch { return '' } }
 const fmtDate = (s: string) => new Date(s).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
 const OFFLINE_MSG = 'Photos and voice notes need internet.'
@@ -139,6 +142,7 @@ export default function ChatShell() {
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
   const pres = usePresence()
+  const ai = useAiChat(me)
   const bottom = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convsRef = useRef<Conv[]>([])
@@ -394,7 +398,7 @@ export default function ChatShell() {
 
   // If the open chat no longer exists, go back to the list
   useEffect(() => {
-    if (active && active !== OFFICIAL && !convs.some((c) => c.id === active)) setActive(null)
+    if (active && active !== OFFICIAL && active !== GEMINI && !convs.some((c) => c.id === active)) setActive(null)
   }, [convs, active])
 
   // Mark the open chat as read (newest message's server time) and scroll down
@@ -676,17 +680,13 @@ export default function ChatShell() {
     const t = new Date(m.created_at).getTime()
     if (t > (lastByConv[m.conversation_id] ?? 0)) lastByConv[m.conversation_id] = t
   }
-  const entries: { kind: 'official' | 'chat'; time: number; conv: Conv | null }[] = [
+  const entries: { kind: 'official' | 'chat' | 'gemini'; time: number; conv: Conv | null }[] = [
     ...(official.length
       ? [{ kind: 'official' as const, time: new Date(official[official.length - 1].created_at).getTime(), conv: null }]
       : []),
+    { kind: 'gemini' as const, time: ai.msgs.length ? new Date(ai.msgs[ai.msgs.length - 1].at).getTime() : 0, conv: null },
     ...convs.map((c) => ({ kind: 'chat' as const, time: lastByConv[c.id] ?? 0, conv: c })),
   ].sort((x, y) => y.time - x.time)
-
-  // Opens OpenAI (ChatGPT) in the browser. This is our own button, not an official OpenAI one.
-  function openAI() {
-    window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
-  }
 
   async function invite() {
     setTopMenu(false)
@@ -793,10 +793,25 @@ export default function ChatShell() {
                 </button>
               </li>
             ))}
-            {tab === 'chats' && !q && entries.length === 0 && (
+            {tab === 'chats' && !q && convs.length === 0 && (
               <li className="p-4 text-sm text-silver-300">No chats yet. Search for a username above to start one.</li>
             )}
             {tab === 'chats' && !q && entries.map((e) => {
+              if (e.kind === 'gemini') {
+                const last = ai.msgs[ai.msgs.length - 1]
+                return (
+                  <li key="gemini">
+                    <button onClick={() => openPane(GEMINI)}
+                      className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
+                      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-navy-700"><SparkIcon /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">Gemini AI</span>
+                        <span className="block truncate text-sm text-silver-300">{last ? last.text : 'Ask me anything'}</span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              }
               if (e.kind === 'official') {
                 return (
                   <li key="official">
@@ -859,7 +874,7 @@ export default function ChatShell() {
           {notice && <p className="border-t border-navy-700 p-3 text-center text-xs text-silver-500">{notice}</p>}
 
           <div className="pointer-events-none absolute bottom-28 right-4 z-10 flex flex-col items-end gap-3">
-            <button onClick={openAI} aria-label="Open AI chat" title="Open AI"
+            <button onClick={() => openPane(GEMINI)} aria-label="Gemini AI chat" title="Gemini AI"
               className="pointer-events-auto grid h-12 w-12 place-items-center rounded-2xl bg-navy-800 shadow-lg ring-1 ring-navy-700 active:scale-95">
               <SparkIcon />
             </button>
@@ -875,7 +890,9 @@ export default function ChatShell() {
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
-          {active === OFFICIAL ? (
+          {active === GEMINI ? (
+            <GeminiPane ai={ai} onBack={closePane} />
+          ) : active === OFFICIAL ? (
             <>
               <header className="flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={closePane} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
