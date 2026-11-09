@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import Logo from '../components/Logo'
 import Avatar from '../components/Avatar'
 import StatusDot from '../components/StatusDot'
+import { requestLastSeen, usePresence } from '../lib/presence'
 import { outboxAll, outboxClear, outboxDelete, outboxPut } from '../lib/outbox'
 import type { OutItem } from '../lib/outbox'
 import { supabase } from '../lib/supabase'
@@ -33,6 +34,21 @@ const LONG_TEXT = 300
 const fmt = (s: string) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 const nice = (m: string) =>
   /row-level security/i.test(m) ? 'Could not send. The chat may have been deleted, or sending is blocked.' : m
+
+const OnlineDot = () => (
+  <span role="img" aria-label="Online" title="Online" className="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-green-500" />
+)
+
+// "today 3:40 PM", "yesterday 3:40 PM" or "Nov 7, 3:40 PM"
+const fmtSeen = (iso: string) => {
+  const d = new Date(iso)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const day = new Date(); day.setHours(0, 0, 0, 0)
+  const diff = Math.round((day.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000)
+  if (diff <= 0) return `today ${time}`
+  if (diff === 1) return `yesterday ${time}`
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
 
 const PlaneIcon = () => (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden>
@@ -122,6 +138,7 @@ export default function ChatShell() {
   const searchRef = useRef<HTMLInputElement>(null)
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
   const brand = useBrand()
+  const pres = usePresence()
   const bottom = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convsRef = useRef<Conv[]>([])
@@ -360,6 +377,13 @@ export default function ChatShell() {
       window.removeEventListener('offline', goOffline)
     }
   }, [me, loadAll])
+
+  // Last seen of the people in my chats and contacts (one request for all of them)
+  useEffect(() => {
+    const ids = Array.from(new Set([...convs.map((c) => c.peerId), ...contacts.map((c) => c.id)]))
+      .filter((x): x is string => !!x)
+    if (ids.length && visible) requestLastSeen(ids)
+  }, [convs.length, contacts.length, visible])
 
   // Keep trying to send queued messages while the app is open
   useEffect(() => {
@@ -639,6 +663,13 @@ export default function ChatShell() {
   }
   const chat = convs.find((c) => c.id === active)
   const totalUnread = convs.reduce((n, c) => n + unread(c), 0)
+  const onlineOf = (id: string) => pres.showOnline && !!pres.online[id]
+  const presenceText = (id: string) => {
+    if (onlineOf(id)) return 'Online'
+    const t = pres.lastSeen[id]
+    if (t && pres.showLast) return `Last seen ${fmtSeen(t)}`
+    return pres.showOnline ? 'Offline' : ''
+  }
   const chatPeers = new Set(convs.map((c) => c.peerId))
   const lastByConv: Record<string, number> = {}
   for (const m of msgs) {
@@ -792,7 +823,10 @@ export default function ChatShell() {
                     className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
                     <Avatar path={c.avatar} name={nameOf(c)} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{nameOf(c)}</span>
+                      <span className="flex items-center gap-2 font-medium">
+                        <span className="truncate">{nameOf(c)}</span>
+                        {c.peerId && onlineOf(c.peerId) && <OnlineDot />}
+                      </span>
                       <span className="block truncate text-sm text-silver-300">{lastOf(c.id)}</span>
                     </span>
                     {n > 0 && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs">{n}</span>}
@@ -811,7 +845,10 @@ export default function ChatShell() {
                   className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-navy-800">
                   <Avatar path={c.avatar} name={nicks[c.id] || c.username} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{nicks[c.id] || c.username}</span>
+                    <span className="flex items-center gap-2 font-medium">
+                      <span className="truncate">{nicks[c.id] || c.username}</span>
+                      {onlineOf(c.id) && <OnlineDot />}
+                    </span>
                     <span className="block text-xs text-silver-500">{chatPeers.has(c.id) ? 'Open chat' : 'Tap to chat'}</span>
                   </span>
                 </button>
@@ -868,7 +905,15 @@ export default function ChatShell() {
               <header className="relative flex items-center gap-3 border-b border-navy-700 bg-navy-900 p-3">
                 <button onClick={closePane} aria-label="Back to chats" className="px-2 text-xl text-gold-200 md:hidden">&larr;</button>
                 <Avatar path={chat.avatar} name={nameOf(chat)} size={36} />
-                <span className="flex-1 truncate font-medium">{nameOf(chat)}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{nameOf(chat)}</span>
+                  {chat.peerId && presenceText(chat.peerId) && (
+                    <span className="flex items-center gap-1 text-xs text-silver-300">
+                      {onlineOf(chat.peerId) && <OnlineDot />}
+                      {presenceText(chat.peerId)}
+                    </span>
+                  )}
+                </span>
                 <button onClick={() => setMenu(!menu)} aria-label="Chat options" className="px-2 text-2xl leading-none text-silver-300">&#8942;</button>
                 {menu && (
                   <div className="absolute right-3 top-14 z-10 w-52 rounded-xl border border-navy-700 bg-navy-800 p-1 text-sm shadow-lg">

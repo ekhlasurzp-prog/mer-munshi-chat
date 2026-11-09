@@ -3,6 +3,7 @@ import Avatar from '../components/Avatar'
 import { supabase } from '../lib/supabase'
 import { clearCache } from '../lib/offline'
 import { outboxClear, outboxCount } from '../lib/outbox'
+import { setPresencePrefs, usePresence } from '../lib/presence'
 
 // Shrink a photo to at most 256 px before upload (small and fast on mobile data)
 async function shrink(file: File, max = 256): Promise<Blob> {
@@ -17,6 +18,7 @@ async function shrink(file: File, max = 256): Promise<Blob> {
 }
 
 export default function Profile() {
+  const pres = usePresence()
   const [uid, setUid] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<string | null>(null)
@@ -109,6 +111,19 @@ export default function Profile() {
         </p>
       </div>
       {msg && <p role="alert" className="mt-4 text-center text-sm text-gold-200">{msg}</p>}
+
+      <div className="mt-8 space-y-2 text-sm">
+        <h2 className="text-lg text-gold-200">Privacy</h2>
+        <label className="flex items-center gap-3 rounded-xl bg-navy-900 p-3">
+          <input type="checkbox" checked={pres.showOnline} onChange={(e) => setPresencePrefs({ showOnline: e.target.checked })} />
+          Show when I am online
+        </label>
+        <label className="flex items-center gap-3 rounded-xl bg-navy-900 p-3">
+          <input type="checkbox" checked={pres.showLast} onChange={(e) => setPresencePrefs({ showLast: e.target.checked })} />
+          Show my last seen
+        </label>
+        <p className="text-xs text-silver-500">If you turn these off, you also cannot see other people's status.</p>
+      </div>
 
       {anns.length > 0 && (
         <div className="mt-8">
