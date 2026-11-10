@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { clearCache } from '../lib/offline'
 import { outboxClear, outboxCount } from '../lib/outbox'
 import { setPresencePrefs, usePresence } from '../lib/presence'
+import { useFeatures } from '../lib/features'
 
 // Shrink a photo to at most 256 px before upload (small and fast on mobile data)
 async function shrink(file: File, max = 256): Promise<Blob> {
@@ -19,6 +20,8 @@ async function shrink(file: File, max = 256): Promise<Blob> {
 
 export default function Profile() {
   const pres = usePresence()
+  const fx = useFeatures()
+  const f = (k: string) => fx[k] !== false
   const [uid, setUid] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<string | null>(null)
@@ -99,19 +102,22 @@ export default function Profile() {
       <div className="mt-6 flex flex-col items-center gap-3">
         <Avatar path={avatar} name={name || '?'} size={110} />
         <p className="text-xl">@{name}</p>
-        <div className="flex gap-3">
-          <label className="btn-gold cursor-pointer px-4 py-2 text-sm">
-            {avatar ? 'Change photo' : 'Add photo'}
-            <input type="file" accept="image/*" className="hidden" onChange={pick} disabled={busy} />
-          </label>
-          {avatar && <button onClick={removePhoto} disabled={busy} className="btn-ghost px-4 py-2 text-sm">Remove</button>}
-        </div>
+        {f('profile_photo') && (
+          <div className="flex gap-3">
+            <label className="btn-gold cursor-pointer px-4 py-2 text-sm">
+              {avatar ? 'Change photo' : 'Add photo'}
+              <input type="file" accept="image/*" className="hidden" onChange={pick} disabled={busy} />
+            </label>
+            {avatar && <button onClick={removePhoto} disabled={busy} className="btn-ghost px-4 py-2 text-sm">Remove</button>}
+          </div>
+        )}
         <p className="text-center text-xs text-silver-500">
           Your photo is visible to other signed-in users. Your username cannot be changed here.
         </p>
       </div>
       {msg && <p role="alert" className="mt-4 text-center text-sm text-gold-200">{msg}</p>}
 
+      {f('online') && (
       <div className="mt-8 space-y-2 text-sm">
         <h2 className="text-lg text-gold-200">Privacy</h2>
         <label className="flex items-center gap-3 rounded-xl bg-navy-900 p-3">
@@ -124,6 +130,7 @@ export default function Profile() {
         </label>
         <p className="text-xs text-silver-500">If you turn these off, you also cannot see other people's status.</p>
       </div>
+      )}
 
       {anns.length > 0 && (
         <div className="mt-8">

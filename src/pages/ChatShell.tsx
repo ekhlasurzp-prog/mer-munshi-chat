@@ -4,6 +4,7 @@ import Avatar from '../components/Avatar'
 import StatusDot from '../components/StatusDot'
 import { requestLastSeen, usePresence } from '../lib/presence'
 import { useAiChat } from '../lib/ai'
+import { refreshFeatures, useFeatures } from '../lib/features'
 import GeminiPane from '../components/GeminiPane'
 import { outboxAll, outboxClear, outboxDelete, outboxPut } from '../lib/outbox'
 import type { OutItem } from '../lib/outbox'
@@ -143,6 +144,8 @@ export default function ChatShell() {
   const brand = useBrand()
   const pres = usePresence()
   const ai = useAiChat(me)
+  const fx = useFeatures()
+  const f = (k: string) => fx[k] !== false // a feature the admin has not switched off is ON
   const bottom = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convsRef = useRef<Conv[]>([])
@@ -181,6 +184,7 @@ export default function ChatShell() {
   const loadAll = useCallback(async (uid: string) => {
     const sb = supabase
     if (!sb) return
+    refreshFeatures()
     try {
       const { data: mem, error: memErr } = await sb.from('conversation_members')
         .select('conversation_id, last_read_at, conversations(id,type,title)').eq('user_id', uid)
@@ -399,7 +403,10 @@ export default function ChatShell() {
   // If the open chat no longer exists, go back to the list
   useEffect(() => {
     if (active && active !== OFFICIAL && active !== GEMINI && !convs.some((c) => c.id === active)) setActive(null)
-  }, [convs, active])
+    if (active === GEMINI && !f('ai')) setActive(null)
+    if (active === OFFICIAL && !f('updates')) setActive(null)
+    if (tab === 'contacts' && !f('contacts')) setTab('chats')
+  }, [convs, active, fx, tab])
 
   // Mark the open chat as read (newest message's server time) and scroll down
   useEffect(() => {
@@ -667,8 +674,9 @@ export default function ChatShell() {
   }
   const chat = convs.find((c) => c.id === active)
   const totalUnread = convs.reduce((n, c) => n + unread(c), 0)
-  const onlineOf = (id: string) => pres.showOnline && !!pres.online[id]
+  const onlineOf = (id: string) => f('online') && pres.showOnline && !!pres.online[id]
   const presenceText = (id: string) => {
+    if (!f('online')) return ''
     if (onlineOf(id)) return 'Online'
     const t = pres.lastSeen[id]
     if (t && pres.showLast) return `Last seen ${fmtSeen(t)}`
@@ -681,10 +689,10 @@ export default function ChatShell() {
     if (t > (lastByConv[m.conversation_id] ?? 0)) lastByConv[m.conversation_id] = t
   }
   const entries: { kind: 'official' | 'chat' | 'gemini'; time: number; conv: Conv | null }[] = [
-    ...(official.length
+    ...(official.length && f('updates')
       ? [{ kind: 'official' as const, time: new Date(official[official.length - 1].created_at).getTime(), conv: null }]
       : []),
-    { kind: 'gemini' as const, time: ai.msgs.length ? new Date(ai.msgs[ai.msgs.length - 1].at).getTime() : 0, conv: null },
+    ...(f('ai') ? [{ kind: 'gemini' as const, time: ai.msgs.length ? new Date(ai.msgs[ai.msgs.length - 1].at).getTime() : 0, conv: null }] : []),
     ...convs.map((c) => ({ kind: 'chat' as const, time: lastByConv[c.id] ?? 0, conv: c })),
   ].sort((x, y) => y.time - x.time)
 
@@ -725,7 +733,7 @@ export default function ChatShell() {
           { key: 'contacts', label: 'Contacts', icon: <PeopleIcon />, badge: 0, active: current === 'contacts', on: () => goTab('contacts') },
           { key: 'updates', label: 'Updates', icon: <BellIcon />, badge: officialUnread, active: current === 'updates', on: () => { if (activeRef.current !== OFFICIAL) openPane(OFFICIAL) } },
           { key: 'me', label: 'Profile', icon: <UserIcon />, badge: 0, active: false, on: () => { window.location.hash = '/profile' } },
-        ].map((t) => (
+        ].filter((t) => (t.key !== 'contacts' || f('contacts')) && (t.key !== 'updates' || f('updates'))).map((t) => (
           <button key={t.key} onClick={t.on} className="flex flex-1 flex-col items-center gap-1 text-xs">
             <span className={`relative grid h-8 w-14 place-items-center rounded-full ${t.active ? 'bg-navy-700 text-gold-200' : 'text-silver-300'}`}>
               {t.icon}
@@ -763,7 +771,7 @@ export default function ChatShell() {
                 <div className="fixed inset-0 z-10" onClick={() => setTopMenu(false)} />
                 <div className="absolute right-3 top-14 z-20 w-52 rounded-xl border border-navy-700 bg-navy-800 p-1 text-sm shadow-lg">
                   <a href="#/profile" className="block rounded-lg px-3 py-2 active:bg-navy-700">Profile</a>
-                  <button onClick={invite} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Invite friends</button>
+                  {f('invite') && <button onClick={invite} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Invite friends</button>}
                   <a href="#/privacy" className="block rounded-lg px-3 py-2 active:bg-navy-700">Privacy policy</a>
                   <a href="#/terms" className="block rounded-lg px-3 py-2 active:bg-navy-700">Terms of service</a>
                   {isAdmin && <a href="#/admin" className="block rounded-lg px-3 py-2 active:bg-navy-700">Admin panel</a>}
@@ -874,10 +882,12 @@ export default function ChatShell() {
           {notice && <p className="border-t border-navy-700 p-3 text-center text-xs text-silver-500">{notice}</p>}
 
           <div className="pointer-events-none absolute bottom-28 right-4 z-10 flex flex-col items-end gap-3">
-            <button onClick={() => openPane(GEMINI)} aria-label="Gemini AI chat" title="Gemini AI"
-              className="pointer-events-auto grid h-12 w-12 place-items-center rounded-2xl bg-navy-800 shadow-lg ring-1 ring-navy-700 active:scale-95">
-              <SparkIcon />
-            </button>
+            {f('ai') && (
+              <button onClick={() => openPane(GEMINI)} aria-label="Gemini AI chat" title="Gemini AI"
+                className="pointer-events-auto grid h-12 w-12 place-items-center rounded-2xl bg-navy-800 shadow-lg ring-1 ring-navy-700 active:scale-95">
+                <SparkIcon />
+              </button>
+            )}
             <button
               onClick={() => { setTab('chats'); setQ(''); window.setTimeout(() => searchRef.current?.focus(), 60) }}
               aria-label="New chat" title="New chat"
@@ -890,7 +900,7 @@ export default function ChatShell() {
         </aside>
 
         <section className={`${active ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col md:flex`}>
-          {active === GEMINI ? (
+          {active === GEMINI && f('ai') ? (
             <GeminiPane ai={ai} onBack={closePane} />
           ) : active === OFFICIAL ? (
             <>
@@ -934,10 +944,10 @@ export default function ChatShell() {
                 <button onClick={() => setMenu(!menu)} aria-label="Chat options" className="px-2 text-2xl leading-none text-silver-300">&#8942;</button>
                 {menu && (
                   <div className="absolute right-3 top-14 z-10 w-52 rounded-xl border border-navy-700 bg-navy-800 p-1 text-sm shadow-lg">
-                    {chat.peerId && <button onClick={() => renamePeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Rename this person</button>}
-                    {chat.peerId && <button onClick={() => toggleBlock(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">{blocked[chat.peerId] ? 'Unblock' : 'Block'}</button>}
-                    {chat.peerId && <button onClick={() => reportPeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Report</button>}
-                    <button onClick={deleteChat} className="block w-full rounded-lg px-3 py-2 text-left text-red-300 active:bg-navy-700">Delete chat</button>
+                    {f('nicknames') && chat.peerId && <button onClick={() => renamePeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Rename this person</button>}
+                    {f('block_report') && chat.peerId && <button onClick={() => toggleBlock(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">{blocked[chat.peerId] ? 'Unblock' : 'Block'}</button>}
+                    {f('block_report') && chat.peerId && <button onClick={() => reportPeer(chat)} className="block w-full rounded-lg px-3 py-2 text-left active:bg-navy-700">Report</button>}
+                    {f('delete_chat') && <button onClick={deleteChat} className="block w-full rounded-lg px-3 py-2 text-left text-red-300 active:bg-navy-700">Delete chat</button>}
                   </div>
                 )}
               </header>
@@ -953,7 +963,7 @@ export default function ChatShell() {
                   return (
                     <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
                       <div onClick={() => !m.deleted_at && !m._pending && setSel(sel === m.id ? null : m.id)}
-                        onDoubleClick={() => react(m, HEART)}
+                        onDoubleClick={() => f('reactions') && react(m, HEART)}
                         className={`max-w-[80%] touch-manipulation rounded-2xl px-4 py-2 ${mine ? 'rounded-br-sm bg-bubble text-white' : 'rounded-bl-sm bg-silver-100 text-navy-950'}`}>
                         {m.deleted_at ? (
                           <p className="italic opacity-70">Message deleted</p>
@@ -969,7 +979,7 @@ export default function ChatShell() {
                             <>
                               {m._pending === 'sending' && <span>Sending</span>}
                               {m._pending === 'failed' && <span>Failed</span>}
-                              <StatusDot kind={m._pending ? m._pending : seen ? 'seen' : 'sent'} />
+                              <StatusDot kind={m._pending ? m._pending : seen && f('seen') ? 'seen' : 'sent'} />
                             </>
                           )}
                         </p>
@@ -980,16 +990,16 @@ export default function ChatShell() {
                           <button onClick={() => dropMsg(m.id)} className="text-red-300 underline">Delete</button>
                         </div>
                       )}
-                      {!m.deleted_at && Object.keys(counts).length > 0 && (
+                      {f('reactions') && !m.deleted_at && Object.keys(counts).length > 0 && (
                         <div className="-mt-1 flex gap-1">
                           {Object.entries(counts).map(([e, n]) => (
                             <span key={e} className={`rounded-full px-2 text-xs ${myReact === e ? 'bg-gold-400/30' : 'bg-navy-800'}`}>{e} {n > 1 ? n : ''}</span>
                           ))}
                         </div>
                       )}
-                      {sel === m.id && !m.deleted_at && (
+                      {sel === m.id && !m.deleted_at && (f('reactions') || mine) && (
                         <div className="mt-1 flex flex-wrap items-center gap-3 rounded-full bg-navy-800 px-3 py-1">
-                          {EMOJIS.map((e) => (
+                          {f('reactions') && EMOJIS.map((e) => (
                             <button key={e} onClick={() => react(m, e)} className="text-xl">{e}</button>
                           ))}
                           {mine && (
@@ -1015,18 +1025,20 @@ export default function ChatShell() {
               ) : (
                 <form onSubmit={send} className="flex items-center gap-2 border-t border-navy-700 bg-navy-900 p-3">
                   <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPick} />
-                  <button type="button" aria-label="Send a photo" onClick={() => fileRef.current?.click()}
-                    className="grid h-12 w-12 place-items-center rounded-full bg-navy-800 text-xl">&#128247;</button>
+                  {f('photos') && (
+                    <button type="button" aria-label="Send a photo" onClick={() => fileRef.current?.click()}
+                      className="grid h-12 w-12 place-items-center rounded-full bg-navy-800 text-xl">&#128247;</button>
+                  )}
                   <input className="field min-w-0 flex-1" value={text} onChange={(e) => setText(e.target.value)}
                     placeholder="Type a message" enterKeyHint="send" maxLength={4000} />
                   {text.trim() ? (
                     <button aria-label="Send" className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-b from-gold-200 to-gold-400 text-navy-950 active:scale-95">
                       <PlaneIcon />
                     </button>
-                  ) : (
+                  ) : f('voice') ? (
                     <button type="button" aria-label="Record a voice message" onClick={startRec}
                       className="grid h-12 w-12 place-items-center rounded-full bg-navy-800 text-xl">&#127908;</button>
-                  )}
+                  ) : null}
                 </form>
               )}
             </>

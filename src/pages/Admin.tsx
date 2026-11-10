@@ -2,6 +2,7 @@ import { ChangeEvent, useCallback, useEffect, useState } from 'react'
 import Logo from '../components/Logo'
 import { supabase } from '../lib/supabase'
 import { refreshBrand } from '../lib/brand'
+import { FEATURES, refreshFeatures, useFeatures } from '../lib/features'
 
 // Crop to a centered square and shrink, so the logo stays undistorted inside its circle
 async function squareLogo(file: File, size = 512): Promise<Blob> {
@@ -34,6 +35,7 @@ export default function Admin() {
   const [annText, setAnnText] = useState('')
   const [welcome, setWelcome] = useState('')
   const [busy, setBusy] = useState(false)
+  const fx = useFeatures()
 
   const load = useCallback(async () => {
     const sb = supabase
@@ -102,6 +104,28 @@ export default function Admin() {
     if (error) { setNote(error.message); return }
     setNote(data?.skipped ? 'Automatic deletion is off.' : `Deleted ${data?.deleted ?? 0} messages and ${data?.files ?? 0} files.`)
     load()
+  }
+
+  async function toggleFeature(key: string, enabled: boolean) {
+    const { error } = await supabase!.rpc('admin_set_feature', { feature: key, enabled })
+    setNote(error ? error.message : 'Saved. Users see the change the next time they open the app.')
+    if (!error) refreshFeatures()
+  }
+
+  // Sends one tiny question to Gemini and shows exactly what happened
+  async function testAi() {
+    setNote('Testing the AI...')
+    const { data, error } = await supabase!.functions.invoke('gemini-chat', {
+      body: { messages: [{ role: 'user', text: 'Reply with the single word OK.' }] },
+    })
+    if (error) {
+      let m = error.message
+      const ctx = (error as unknown as { context?: { json?: () => Promise<{ error?: string }> } }).context
+      if (ctx?.json) { try { const j = await ctx.json(); if (j?.error) m = j.error } catch { /* keep */ } }
+      setNote('AI test failed: ' + m)
+      return
+    }
+    setNote('AI test worked: ' + String(data?.reply ?? '').slice(0, 80))
   }
 
   async function saveName() {
@@ -237,6 +261,27 @@ export default function Admin() {
         <button onClick={runNow} className="btn-ghost flex-1">Run cleanup now</button>
       </div>
       {note && <p className="mt-2 text-sm text-gold-200">{note}</p>}
+
+      <h2 className="mt-8 text-lg text-gold-200">Features (show or hide for users)</h2>
+      <p className="text-xs text-silver-500">Switch a feature off to hide it from everyone's app. Users see the change the next time they open the app. Existing messages and data are not deleted.</p>
+      <ul className="mt-2 space-y-2">
+        {FEATURES.map((ft) => {
+          const on = fx[ft.key] !== false
+          return (
+            <li key={ft.key} className="flex items-center gap-3 rounded-xl bg-navy-900 p-3">
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{ft.label}</span>
+                <span className="block text-xs text-silver-500">{ft.desc}</span>
+              </span>
+              <button role="switch" aria-checked={on} aria-label={ft.label} onClick={() => toggleFeature(ft.key, !on)}
+                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? 'bg-emerald-500' : 'bg-navy-700'}`}>
+                <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      <button onClick={testAi} className="btn-ghost mt-3 w-full">Test the Gemini AI</button>
 
       <h2 className="mt-8 text-lg text-gold-200">App name and logo</h2>
       <p className="text-xs text-silver-500">Shown everywhere inside the app. A square picture works best; it is shown inside a circle.</p>
