@@ -26,7 +26,13 @@ export function useAiChat(uid: string | null) {
     setBusy(true); setError('')
     try {
       const payload = history.slice(-20).map((m) => ({ role: m.role, text: m.text }))
-      const { data, error: err } = await sb.functions.invoke('gemini-chat', { body: { messages: payload } })
+      const timeout = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error('The AI took too long. Please try again.')), 45000)
+      })
+      const { data, error: err } = await Promise.race([
+        sb.functions.invoke('gemini-chat', { body: { messages: payload } }),
+        timeout,
+      ])
       if (err || !data?.reply) {
         let msg = 'The AI is not available right now. Please try again.'
         const ctx = (err as unknown as { context?: { json?: () => Promise<{ error?: string }> } } | null)?.context
