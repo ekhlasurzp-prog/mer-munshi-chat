@@ -3,7 +3,7 @@ import { supabase } from './supabase'
 
 // Switches the admin uses to show or hide parts of the app. A feature with no switch set is ON.
 export const FEATURES = [
-  { key: 'ai', label: 'Gemini AI chat', desc: 'The AI chat and the star button' },
+  { key: 'ai', label: 'GCM AI chat', desc: 'The AI chat and its logo button' },
   { key: 'photos', label: 'Sending photos', desc: 'The camera button in chats' },
   { key: 'voice', label: 'Voice messages', desc: 'The microphone button in chats' },
   { key: 'reactions', label: 'Reactions', desc: 'Emoji reactions and the double-tap heart' },

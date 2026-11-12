@@ -33,12 +33,19 @@ export function useAiChat(uid: string | null) {
         sb.functions.invoke('gemini-chat', { body: { messages: payload } }),
         timeout,
       ])
+      if (data?.error) throw new Error(String(data.error))
       if (err || !data?.reply) {
         let msg = 'The AI is not available right now. Please try again.'
         const ctx = (err as unknown as { context?: { json?: () => Promise<{ error?: string }> } } | null)?.context
         if (ctx?.json) {
-          try { const j = await ctx.json(); if (j?.error) msg = j.error } catch { /* keep the default message */ }
+          try {
+            const j = await ctx.json()
+            if (j?.error) msg = j.error
+            else if (j?.message) msg = 'AI error: ' + String(j.message).slice(0, 120)
+          } catch { /* keep the default message */ }
         }
+        const st = (err as unknown as { context?: { status?: number } } | null)?.context?.status
+        if (st && msg.startsWith('The AI is not available')) msg = `The AI is not available right now (error ${st}). Please try again.`
         throw new Error(msg)
       }
       const reply: AiMsg = { id: crypto.randomUUID(), role: 'model', text: String(data.reply), at: new Date().toISOString() }
