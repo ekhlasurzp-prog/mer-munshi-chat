@@ -811,9 +811,9 @@ export default function ChatShell() {
                   <li key="gemini">
                     <button onClick={() => openPane(GEMINI)}
                       className="flex w-full items-center gap-3 border-b border-navy-800 p-3 text-left active:bg-navy-800">
-                      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-navy-700"><SparkIcon /></span>
+                      <img src="/icons/gcm-ai.png" alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">Gemini AI</span>
+                        <span className="block truncate font-medium">GCM AI</span>
                         <span className="block truncate text-sm text-silver-300">{last ? last.text : 'Ask me anything'}</span>
                       </span>
                     </button>
@@ -883,9 +883,9 @@ export default function ChatShell() {
 
           <div className="pointer-events-none absolute bottom-28 right-4 z-10 flex flex-col items-end gap-3">
             {f('ai') && (
-              <button onClick={() => openPane(GEMINI)} aria-label="Gemini AI chat" title="Gemini AI"
-                className="pointer-events-auto grid h-12 w-12 place-items-center rounded-2xl bg-navy-800 shadow-lg ring-1 ring-navy-700 active:scale-95">
-                <SparkIcon />
+              <button onClick={() => openPane(GEMINI)} aria-label="GCM AI chat" title="GCM AI"
+                className="pointer-events-auto grid h-12 w-12 place-items-center overflow-hidden rounded-2xl bg-white shadow-lg ring-1 ring-navy-700 active:scale-95">
+                <img src="/icons/gcm-ai.png" alt="" className="h-10 w-10 rounded-full object-cover" />
               </button>
             )}
             <button

@@ -118,6 +118,7 @@ export default function Admin() {
     const { data, error } = await supabase!.functions.invoke('gemini-chat', {
       body: { messages: [{ role: 'user', text: 'Reply with the single word OK.' }] },
     })
+    if (data?.error) { setNote('AI test failed: ' + String(data.error)); return }
     if (error) {
       let m = error.message
       const ctx = (error as unknown as { context?: { json?: () => Promise<{ error?: string }> } }).context
@@ -125,7 +126,7 @@ export default function Admin() {
       setNote('AI test failed: ' + m)
       return
     }
-    setNote('AI test worked: ' + String(data?.reply ?? '').slice(0, 80))
+    setNote('AI test worked: ' + String(data?.reply ?? '').slice(0, 80) + (data?.model ? ` [${data.model}]` : ''))
   }
 
   async function saveName() {
@@ -281,7 +282,7 @@ export default function Admin() {
           )
         })}
       </ul>
-      <button onClick={testAi} className="btn-ghost mt-3 w-full">Test the Gemini AI</button>
+      <button onClick={testAi} className="btn-ghost mt-3 w-full">Test the AI</button>
 
       <h2 className="mt-8 text-lg text-gold-200">App name and logo</h2>
       <p className="text-xs text-silver-500">Shown everywhere inside the app. A square picture works best; it is shown inside a circle.</p>
