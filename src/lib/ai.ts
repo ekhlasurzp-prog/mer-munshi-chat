@@ -36,7 +36,7 @@ export function useAiChat(uid: string | null) {
       if (data?.error) throw new Error(String(data.error))
       if (err || !data?.reply) {
         let msg = 'The AI is not available right now. Please try again.'
-        const ctx = (err as unknown as { context?: { json?: () => Promise<{ error?: string }> } } | null)?.context
+        const ctx = (err as unknown as { context?: { json?: () => Promise<{ error?: string; message?: string }> } } | null)?.context
         if (ctx?.json) {
           try {
             const j = await ctx.json()
